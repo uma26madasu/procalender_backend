@@ -11,6 +11,14 @@ const nodemailer = require('nodemailer');
 const app = express();
 
 // Middleware
+// Temporary placeholder middleware (basic auth check)
+function authMiddleware(req, res, next) {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
 app.use(express.json());
 app.use(session({ secret: 'your_secret', resave: false, saveUninitialized: true }));
 
