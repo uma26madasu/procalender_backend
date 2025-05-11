@@ -2,6 +2,16 @@ const express = require('express');
 const cors = require('cors'); // Add this
 const app = express();
 
+// Enable CORS for all routes
+app.use(cors({
+  origin: [
+    'https://procalender-frontend.vercel.app',
+    'http://localhost:3000'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
+
 // Essential middleware
 app.use(cors());
 app.use(express.json());
