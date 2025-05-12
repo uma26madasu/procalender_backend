@@ -1,25 +1,23 @@
-// Simplified server.js for initial deployment
+// Simplified server.js
 const express = require('express');
 const cors = require('cors');
-const path = require('path'); // Add path for directory resolution
+const path = require('path');
+const fs = require('fs');
+
+// Initialize the Express app
 const app = express();
 
-// Debug current directory and file paths
+// Debug information about the environment
+console.log('Node version:', process.version);
 console.log('Current directory:', __dirname);
-try {
-  console.log('Attempting to import User model from:', require.resolve('./models/User'));
-} catch (error) {
-  console.log('Error resolving User model:', error.message);
-  console.log('Files in current directory:', require('fs').readdirSync(__dirname));
-  
-  // Check if models directory exists
-  const modelsPath = path.join(__dirname, 'models');
-  console.log('Models directory exists:', require('fs').existsSync(modelsPath));
-  
-  // If models directory exists, check its contents
-  if (require('fs').existsSync(modelsPath)) {
-    console.log('Files in models directory:', require('fs').readdirSync(modelsPath));
-  }
+console.log('Files in current directory:', fs.readdirSync(__dirname));
+
+// Check if models directory exists and log its contents
+const modelsPath = path.join(__dirname, 'models');
+if (fs.existsSync(modelsPath)) {
+  console.log('Models directory exists. Contents:', fs.readdirSync(modelsPath));
+} else {
+  console.log('Models directory does NOT exist');
 }
 
 // Enable CORS
@@ -29,23 +27,32 @@ app.use(cors({
   credentials: true
 }));
 
+// Parse JSON request bodies
 app.use(express.json());
 
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    status: 'Backend running',
-    directory: __dirname,
-    files: require('fs').readdirSync(__dirname)
+    status: 'Success',
+    message: 'ProCalender Backend API is running',
+    timestamp: new Date().toISOString(),
+    environment: {
+      nodeVersion: process.version,
+      platform: process.platform
+    }
   });
 });
 
-// Simple test endpoint
+// Test API endpoint
 app.get('/api/test', (req, res) => {
   res.json({ 
-    message: 'API is working'
+    message: 'API test endpoint is working',
+    success: true 
   });
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// Start the server
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
