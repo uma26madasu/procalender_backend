@@ -56,3 +56,26 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Add to server.js
+const mongoose = require('mongoose');
+require('dotenv').config();
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log('MongoDB connected'))
+.catch(err => console.error('MongoDB connection error:', err));
+
+// Import and use routes
+const authRoutes = require('./routes/auth');
+const linkRoutes = require('./routes/links');
+const windowRoutes = require('./routes/windows');
+const bookingRoutes = require('./routes/bookings');
+
+app.use('/api/auth', authRoutes);
+app.use('/api/links', linkRoutes);
+app.use('/api/windows', windowRoutes);
+app.use('/api/bookings', bookingRoutes);
