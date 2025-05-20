@@ -73,7 +73,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 const authRoutes = require('./routes/auth');
 const linkRoutes = require('./routes/links');
 const windowRoutes = require('./routes/windows');
-const bookingRoutes = require('./routes/bookings');
+const bookingRoutes = require('./routes/bookingRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/links', linkRoutes);
