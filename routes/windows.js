@@ -1,9 +1,24 @@
+// routes/windows.js
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../middleware/auth');
+const {
+  getWindows,
+  createWindow,
+  updateWindow,
+  deleteWindow
+} = require('../controllers/windowController');
 
-// Basic routes for windows (can be expanded later)
-router.get('/', (req, res) => {
-  res.json({ message: 'Windows API endpoint' });
-});
+// All routes require authentication
+router.use(protect);
+
+// Routes
+router.route('/')
+  .get(getWindows)
+  .post(createWindow);
+
+router.route('/:id')
+  .put(updateWindow)
+  .delete(deleteWindow);
 
 module.exports = router;

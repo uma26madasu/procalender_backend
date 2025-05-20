@@ -5,5 +5,6 @@ const router = express.Router();
 router.get('/', (req, res) => {
   res.json({ message: 'Bookings API endpoint' });
 });
+router.get('/available-slots/:linkId', bookingController.getAvailableSlots);
 
 module.exports = router;

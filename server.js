@@ -1,5 +1,3 @@
-// Updated server.js
-
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -69,26 +67,19 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => console.log('MongoDB connected'))
 .catch(err => console.error('MongoDB connection error:', err));
 
-// Import available routes
+// Import all routes
 const authRoutes = require('./routes/auth');
+const windowRoutes = require('./routes/windows');
+const bookingRoutes = require('./routes/bookingRoutes');
+const linkRoutes = require('./routes/linkRoutes');
 const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
 
-// Use available routes
+// Use all routes
 app.use('/api/auth', authRoutes);
+app.use('/api/windows', windowRoutes);
+app.use('/api/bookings', bookingRoutes);
+app.use('/api/links', linkRoutes);
 app.use('/api/google-calendar', googleCalendarRoutes);
-
-// Temporary routes for missing endpoints
-app.get('/api/links', (req, res) => {
-  res.json({ message: 'Links API endpoint - Not yet implemented' });
-});
-
-app.get('/api/windows', (req, res) => {
-  res.json({ message: 'Windows API endpoint - Not yet implemented' });
-});
-
-app.get('/api/bookings', (req, res) => {
-  res.json({ message: 'Bookings API endpoint - Not yet implemented' });
-});
 
 // Start the server
 const PORT = process.env.PORT || 10000;
