@@ -1,4 +1,4 @@
-// Simplified server.js
+// Updated server.js
 
 const express = require('express');
 const cors = require('cors');
@@ -21,6 +21,13 @@ if (fs.existsSync(modelsPath)) {
   console.log('Models directory exists. Contents:', fs.readdirSync(modelsPath));
 } else {
   console.log('Models directory does NOT exist');
+}
+
+// Create middleware directory if it doesn't exist
+const middlewarePath = path.join(__dirname, 'middleware');
+if (!fs.existsSync(middlewarePath)) {
+  fs.mkdirSync(middlewarePath);
+  console.log('Created middleware directory');
 }
 
 // Enable CORS
@@ -62,18 +69,26 @@ mongoose.connect(process.env.MONGODB_URI, {
 .then(() => console.log('MongoDB connected'))
 .catch(err => console.error('MongoDB connection error:', err));
 
-// Import and use routes
+// Import available routes
 const authRoutes = require('./routes/auth');
-const linkRoutes = require('./routes/linkRoutes');
-const windowRoutes = require('./routes/windows');
-const bookingRoutes = require('./routes/bookingRoutes');
 const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
 
+// Use available routes
 app.use('/api/auth', authRoutes);
-app.use('/api/links', linkRoutes);
-app.use('/api/windows', windowRoutes);
-app.use('/api/bookings', bookingRoutes);
 app.use('/api/google-calendar', googleCalendarRoutes);
+
+// Temporary routes for missing endpoints
+app.get('/api/links', (req, res) => {
+  res.json({ message: 'Links API endpoint - Not yet implemented' });
+});
+
+app.get('/api/windows', (req, res) => {
+  res.json({ message: 'Windows API endpoint - Not yet implemented' });
+});
+
+app.get('/api/bookings', (req, res) => {
+  res.json({ message: 'Bookings API endpoint - Not yet implemented' });
+});
 
 // Start the server
 const PORT = process.env.PORT || 10000;
