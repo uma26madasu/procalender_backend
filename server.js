@@ -64,7 +64,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 
 // Import and use routes
 const authRoutes = require('./routes/auth');
-//const linkRoutes = require('./routes/linkRoutes');
+const linkRoutes = require('./routes/linkRoutes');
 const windowRoutes = require('./routes/windows');
 const bookingRoutes = require('./routes/bookingRoutes');
 const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
