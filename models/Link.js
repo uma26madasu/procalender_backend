@@ -1,4 +1,3 @@
-// models/Link.js
 const mongoose = require('mongoose');
 
 /**
@@ -115,6 +114,26 @@ const linkSchema = new mongoose.Schema({
     default: 0
   },
   
+  // Maximum days in advance that can be booked
+  maxAdvanceDays: {
+    type: Number,
+    default: 14,
+    min: 1,
+    max: 365
+  },
+
+  // Approval flow settings
+  requiresApproval: {
+    type: Boolean,
+    default: false
+  },
+  
+  // Users who can approve bookings (empty array means owner approves)
+  approvers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+
   // Creation and update timestamps
   createdAt: {
     type: Date,
@@ -136,5 +155,10 @@ linkSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
+
+// Indexes for better query performance
+linkSchema.index({ ownerId: 1 });
+linkSchema.index({ linkId: 1 }, { unique: true });
+linkSchema.index({ active: 1, expirationDate: 1 });
 
 module.exports = mongoose.model('Link', linkSchema);

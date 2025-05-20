@@ -53,6 +53,40 @@ const bookingSchema = new mongoose.Schema({
     default: 'confirmed'
   },
   
+  // Approval flow fields
+  approvalStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  
+  approvedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  
+  approvedAt: {
+    type: Date
+  },
+  
+  rejectedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  
+  rejectedAt: {
+    type: Date
+  },
+  
+  rejectionReason: {
+    type: String
+  },
+  
+  // For tentative calendar events
+  tentativeEventId: {
+    type: String
+  },
+  
   // Google Calendar event ID (if calendar integration is enabled)
   googleEventId: {
     type: String
@@ -84,7 +118,30 @@ const bookingSchema = new mongoose.Schema({
 // Update the 'updatedAt' field on save
 bookingSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
-  next();
+  
+  // Set default approval status based on link requirements
+  if (this.isNew) {
+    mongoose.model('Link').findById(this.linkId)
+      .then(link => {
+        if (link && link.requiresApproval) {
+          this.approvalStatus = 'pending';
+        } else {
+          this.approvalStatus = 'approved';
+          this.status = 'confirmed';
+        }
+        next();
+      })
+      .catch(err => next(err));
+  } else {
+    next();
+  }
 });
+
+// Indexes for better query performance
+bookingSchema.index({ ownerId: 1 });
+bookingSchema.index({ linkId: 1 });
+bookingSchema.index({ clientEmail: 1 });
+bookingSchema.index({ startTime: 1 });
+bookingSchema.index({ status: 1, approvalStatus: 1 });
 
 module.exports = mongoose.model('Booking', bookingSchema);
