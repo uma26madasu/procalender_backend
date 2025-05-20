@@ -1,22 +1,29 @@
-// models/User.js - Minimal version for testing
+// models/User.js
+
 const mongoose = require('mongoose');
 
-// Simple schema for testing
+// User schema with webhook info
 const userSchema = new mongoose.Schema({
-  email: String,
-  name: String,
+  email: { type: String, required: true },
+  name: { type: String },
   createdAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  calendarWebhooks: [{
+    channelId: String,
+    resourceId: String,
+    calendarId: String,
+    expiration: Date
+  }]
 });
 
-// Export the model only if mongoose is available
+// Export the model
 try {
   module.exports = mongoose.model('User', userSchema);
   console.log('User model exported successfully');
 } catch (error) {
   console.error('Error creating User model:', error.message);
-  // Export a dummy model to prevent crashes
+  // Export a dummy object to prevent crashes
   module.exports = { dummy: true };
 }

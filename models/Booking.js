@@ -7,119 +7,81 @@ const bookingSchema = new mongoose.Schema({
     ref: 'Link',
     required: true
   },
-  
+
   // Owner of the meeting (advisor)
   ownerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  
+
   // Client information
-  clientName: {
-    type: String,
-    required: true
-  },
-  
-  clientEmail: {
-    type: String,
-    required: true
-  },
-  
-  linkedinUrl: {
-    type: String
-  },
-  
+  clientName: { type: String, required: true },
+  clientEmail: { type: String, required: true },
+  linkedinUrl: { type: String },
+
   // Meeting details
-  meetingName: {
-    type: String,
-    required: true
-  },
-  
-  startTime: {
-    type: Date,
-    required: true
-  },
-  
-  endTime: {
-    type: Date,
-    required: true
-  },
-  
-  // Meeting status (confirmed, canceled, completed)
+  meetingName: { type: String, required: true },
+  startTime: { type: Date, required: true },
+  endTime: { type: Date, required: true },
+
+  // Meeting status
   status: {
     type: String,
     enum: ['confirmed', 'canceled', 'completed'],
     default: 'confirmed'
   },
-  
-  // Approval flow fields
+
+  // Approval flow
   approvalStatus: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
-  
-  approvedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  approvedAt: { type: Date },
+  rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  rejectedAt: { type: Date },
+  rejectionReason: { type: String },
+
+  // Calendar events
+  tentativeEventId: { type: String },
+  googleEventId: { type: String },
+
+  // Calendar conflict tracking
+  hasCalendarConflict: {
+    type: Boolean,
+    default: false
   },
-  
-  approvedAt: {
-    type: Date
-  },
-  
-  rejectedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  
-  rejectedAt: {
-    type: Date
-  },
-  
-  rejectionReason: {
-    type: String
-  },
-  
-  // For tentative calendar events
-  tentativeEventId: {
-    type: String
-  },
-  
-  // Google Calendar event ID (if calendar integration is enabled)
-  googleEventId: {
-    type: String
-  },
-  
+  conflictDetails: [{
+    eventId: String,
+    summary: String,
+    start: String,
+    end: String
+  }],
+
   // Custom questions and answers
   questions: [{
     question: String,
     answer: String
   }],
-  
-  // AI-generated context/insights (if applicable)
-  aiContext: {
-    type: String
-  },
-  
-  // Created and updated timestamps
+  aiContext: { type: String },
+
+  // Timestamps
   createdAt: {
     type: Date,
     default: Date.now
   },
-  
   updatedAt: {
     type: Date,
     default: Date.now
   }
 });
 
-// Update the 'updatedAt' field on save
-bookingSchema.pre('save', function(next) {
+// Pre-save hook
+bookingSchema.pre('save', function (next) {
   this.updatedAt = Date.now();
-  
-  // Set default approval status based on link requirements
+
   if (this.isNew) {
     mongoose.model('Link').findById(this.linkId)
       .then(link => {
@@ -137,7 +99,7 @@ bookingSchema.pre('save', function(next) {
   }
 });
 
-// Indexes for better query performance
+// Indexes
 bookingSchema.index({ ownerId: 1 });
 bookingSchema.index({ linkId: 1 });
 bookingSchema.index({ clientEmail: 1 });

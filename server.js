@@ -1,8 +1,11 @@
 // Simplified server.js
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const mongoose = require('mongoose');
+require('dotenv').config();
 
 // Initialize the Express app
 const app = express();
@@ -32,7 +35,7 @@ app.use(express.json());
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'Success',
     message: 'ProCalender Backend API is running',
     timestamp: new Date().toISOString(),
@@ -45,21 +48,11 @@ app.get('/', (req, res) => {
 
 // Test API endpoint
 app.get('/api/test', (req, res) => {
-  res.json({ 
+  res.json({
     message: 'API test endpoint is working',
-    success: true 
+    success: true
   });
 });
-
-// Start the server
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
-// Add to server.js
-const mongoose = require('mongoose');
-require('dotenv').config();
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI, {
@@ -74,8 +67,16 @@ const authRoutes = require('./routes/auth');
 const linkRoutes = require('./routes/links');
 const windowRoutes = require('./routes/windows');
 const bookingRoutes = require('./routes/bookingRoutes');
+const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/links', linkRoutes);
 app.use('/api/windows', windowRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/google-calendar', googleCalendarRoutes);
+
+// Start the server
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
