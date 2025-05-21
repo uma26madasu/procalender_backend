@@ -49,9 +49,14 @@ app.use(cors({
 app.use(express.json());
 
 // MongoDB Connection
-const fallbackUri = "mongodb+srv://umamadasu:Impala%40007@cluster0.h4opqie.mongodb.net/procalender?retryWrites=true&w=majority&appName=Cluster0";
-const uri = process.env.MONGODB_URI || fallbackUri;
-console.log("Using MongoDB URI:", uri.replace(/mongodb\+srv:\/\/[^:]+:[^@]+@/, "mongodb+srv://username:password@")); // Log URI with hidden credentials
+// MongoDB Connection - Diagnostic approach
+console.log("MONGODB_URI from env (first 10 chars):", process.env.MONGODB_URI ? process.env.MONGODB_URI.substring(0, 10) + "..." : "undefined");
+console.log("Environment variable type:", typeof process.env.MONGODB_URI);
+console.log("Environment variable length:", process.env.MONGODB_URI ? process.env.MONGODB_URI.length : 0);
+
+// Explicitly use hardcoded URI
+const uri = "mongodb+srv://umamadasu:Impala%40007@cluster0.h4opqie.mongodb.net/procalender?retryWrites=true&w=majority&appName=Cluster0";
+console.log("Using explicit hardcoded URI");
 
 const client = new MongoClient(uri, {
   serverApi: {
