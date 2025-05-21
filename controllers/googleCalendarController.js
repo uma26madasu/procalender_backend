@@ -11,15 +11,12 @@ const oauth2Client = new google.auth.OAuth2(
 
 /**
  * Helper function to get authenticated calendar client
- * @param {string} userId - User ID
- * @returns {Promise<google.calendar_v3.Calendar>} Authenticated calendar client
  */
 const getCalendarClient = async (userId) => {
   const user = await User.findById(userId);
-  if (!user || !user.googleTokens) {
+  if (!user?.googleTokens) {
     throw new Error('Google Calendar not connected');
   }
-
   oauth2Client.setCredentials(user.googleTokens);
   return google.calendar({ version: 'v3', auth: oauth2Client });
 };
@@ -31,11 +28,7 @@ const getCalendarClient = async (userId) => {
 exports.listCalendars = asyncHandler(async (req, res) => {
   const calendar = await getCalendarClient(req.user.id);
   const response = await calendar.calendarList.list();
-  
-  res.status(200).json({
-    success: true,
-    data: response.data.items
-  });
+  res.status(200).json({ success: true, data: response.data.items });
 });
 
 /**
@@ -52,13 +45,12 @@ exports.getEvents = asyncHandler(async (req, res) => {
     timeMax: endDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
     singleEvents: true,
     orderBy: 'startTime',
-    maxResults: parseInt(limit, 10)
+    maxResults: Math.min(parseInt(limit, 10), 250) // Cap at 250 events
   };
 
   if (pageToken) params.pageToken = pageToken;
 
   const response = await calendar.events.list(params);
-
   res.status(200).json({
     success: true,
     data: response.data.items,
@@ -97,7 +89,8 @@ exports.checkConflicts = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     hasConflicts: conflicts.length > 0,
-    conflicts
+    conflicts,
+    freeSlots: calculateFreeSlots(startTime, endTime, conflicts)
   });
 });
 
@@ -109,22 +102,26 @@ exports.createEvent = asyncHandler(async (req, res) => {
   const { calendarId = 'primary', event, bookingId } = req.body;
   const calendar = await getCalendarClient(req.user.id);
 
+  // Validate event times
+  if (!event.start || !event.end) {
+    throw new Error('Start and end times are required');
+  }
+
   const response = await calendar.events.insert({
     calendarId,
-    requestBody: event
+    requestBody: event,
+    sendUpdates: 'all'
   });
 
   if (bookingId) {
     await Booking.findByIdAndUpdate(bookingId, {
       googleEventId: response.data.id,
-      status: 'confirmed'
+      status: 'confirmed',
+      $unset: { hasCalendarConflict: "", conflictDetails: "" }
     });
   }
 
-  res.status(201).json({
-    success: true,
-    data: response.data
-  });
+  res.status(201).json({ success: true, data: response.data });
 });
 
 /**
@@ -139,13 +136,11 @@ exports.updateEvent = asyncHandler(async (req, res) => {
   const response = await calendar.events.update({
     calendarId,
     eventId,
-    requestBody: event
+    requestBody: event,
+    sendUpdates: 'all'
   });
 
-  res.status(200).json({
-    success: true,
-    data: response.data
-  });
+  res.status(200).json({ success: true, data: response.data });
 });
 
 /**
@@ -154,22 +149,29 @@ exports.updateEvent = asyncHandler(async (req, res) => {
  */
 exports.deleteEvent = asyncHandler(async (req, res) => {
   const { eventId } = req.params;
-  const { calendarId = 'primary' } = req.query;
+  const { calendarId = 'primary', bookingId } = req.query;
   const calendar = await getCalendarClient(req.user.id);
 
-  await calendar.events.delete({ calendarId, eventId });
-
-  res.status(200).json({
-    success: true,
-    message: 'Event deleted successfully'
+  await calendar.events.delete({ 
+    calendarId, 
+    eventId,
+    sendUpdates: 'all'
   });
+
+  if (bookingId) {
+    await Booking.findByIdAndUpdate(bookingId, {
+      $unset: { googleEventId: "", hasCalendarConflict: "", conflictDetails: "" }
+    });
+  }
+
+  res.status(200).json({ success: true, message: 'Event deleted successfully' });
 });
 
 /**
  * @route POST /api/google-calendar/webhook
  * @desc Handle Google Calendar push notifications
  */
-exports.handleWebhook = async (req, res) => {
+exports.handleWebhook = asyncHandler(async (req, res) => {
   // Immediate response required by Google
   res.status(200).end();
 
@@ -182,7 +184,7 @@ exports.handleWebhook = async (req, res) => {
   if (resourceState === 'exists') {
     await processCalendarUpdate(channelId);
   }
-};
+});
 
 // Helper function to process calendar updates
 async function processCalendarUpdate(channelId) {
@@ -197,12 +199,14 @@ async function processCalendarUpdate(channelId) {
     const response = await calendar.events.list({
       calendarId: webhook.calendarId,
       updatedMin: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-      singleEvents: true
+      singleEvents: true,
+      timeMin: new Date().toISOString() // Only check future events
     });
 
     await checkBookingConflicts(user, response.data.items);
   } catch (error) {
     console.error('Error processing calendar update:', error);
+    // Consider adding retry logic for transient errors
   }
 }
 
@@ -210,7 +214,8 @@ async function processCalendarUpdate(channelId) {
 async function checkBookingConflicts(user, events) {
   const bookings = await Booking.find({
     ownerId: user._id,
-    startTime: { $gt: new Date() }
+    startTime: { $gt: new Date() },
+    status: { $in: ['confirmed', 'pending'] }
   });
 
   for (const booking of bookings) {
@@ -223,21 +228,61 @@ async function checkBookingConflicts(user, events) {
       const bookingEnd = new Date(booking.endTime);
 
       return (
-        (eventStart <= bookingStart && eventEnd > bookingStart) ||
-        (eventStart < bookingEnd && eventEnd >= bookingEnd) ||
-        (eventStart >= bookingStart && eventEnd <= bookingEnd)
+        (eventStart < bookingEnd && eventEnd > bookingStart) ||
+        (event.start.date && bookingStart.toDateString() === eventStart.toDateString())
       );
     });
 
     if (conflicts.length > 0) {
-      booking.hasCalendarConflict = true;
-      booking.conflictDetails = conflicts.map(event => ({
-        eventId: event.id,
-        summary: event.summary,
-        start: event.start.dateTime || event.start.date,
-        end: event.end.dateTime || event.end.date
-      }));
-      await booking.save();
+      await Booking.findByIdAndUpdate(booking._id, {
+        hasCalendarConflict: true,
+        conflictDetails: conflicts.map(event => ({
+          eventId: event.id,
+          summary: event.summary,
+          start: event.start.dateTime || event.start.date,
+          end: event.end.dateTime || event.end.date
+        }))
+      });
+    } else if (booking.hasCalendarConflict) {
+      await Booking.findByIdAndUpdate(booking._id, {
+        $unset: { hasCalendarConflict: "", conflictDetails: "" }
+      });
     }
   }
+}
+
+// Helper function to calculate free slots between conflicts
+function calculateFreeSlots(startTime, endTime, conflicts) {
+  const slots = [];
+  let currentStart = new Date(startTime);
+  const end = new Date(endTime);
+
+  // Sort conflicts by start time
+  const sortedConflicts = [...conflicts].sort((a, b) => 
+    new Date(a.start) - new Date(b.start)
+  );
+
+  for (const conflict of sortedConflicts) {
+    const conflictStart = new Date(conflict.start);
+    const conflictEnd = new Date(conflict.end);
+
+    if (conflictStart > currentStart) {
+      slots.push({
+        start: currentStart.toISOString(),
+        end: conflictStart.toISOString()
+      });
+    }
+
+    currentStart = new Date(Math.max(currentStart, conflictEnd));
+  }
+
+  // Add remaining time after last conflict
+  if (currentStart < end) {
+    slots.push({
+      start: currentStart.toISOString(),
+      end: end.toISOString()
+    });
+  }
+
+  return slots;
 }
