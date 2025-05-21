@@ -1,6 +1,6 @@
 const { google } = require('googleapis');
 const { User, Booking } = require('../models');
-const { asyncHandler } = require('../middleware/asyncHandler');
+const asyncHandler = require('../middleware/asyncHandler');
 
 // Configure Google OAuth client
 const oauth2Client = new google.auth.OAuth2(
