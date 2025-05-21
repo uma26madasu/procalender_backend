@@ -49,7 +49,10 @@ app.use(cors({
 app.use(express.json());
 
 // MongoDB Connection
-const uri = process.env.MONGODB_URI;
+const fallbackUri = "mongodb+srv://umamadasu:Impala%40007@cluster0.h4opqie.mongodb.net/procalender?retryWrites=true&w=majority&appName=Cluster0";
+const uri = process.env.MONGODB_URI || fallbackUri;
+console.log("Using MongoDB URI:", uri.replace(/mongodb\+srv:\/\/[^:]+:[^@]+@/, "mongodb+srv://username:password@")); // Log URI with hidden credentials
+
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
