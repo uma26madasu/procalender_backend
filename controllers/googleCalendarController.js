@@ -1,6 +1,7 @@
 const { google } = require('googleapis');
 const { User, Booking } = require('../models');
 const asyncHandler = require('../middleware/asyncHandler');
+const crypto = require('crypto');
 
 // Configure Google OAuth client
 const oauth2Client = new google.auth.OAuth2(
@@ -8,6 +9,9 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
+
+// Generate a unique channel ID
+const generateChannelId = () => crypto.randomBytes(16).toString('hex');
 
 /**
  * Helper function to get authenticated calendar client
@@ -20,6 +24,89 @@ const getCalendarClient = async (userId) => {
   oauth2Client.setCredentials(user.googleTokens);
   return google.calendar({ version: 'v3', auth: oauth2Client });
 };
+
+/**
+ * @route POST /api/google-calendar/register-webhook
+ * @desc Register webhook for Google Calendar notifications
+ */
+exports.registerWebhook = asyncHandler(async (req, res) => {
+  const { calendarId = 'primary' } = req.body;
+  const calendar = await getCalendarClient(req.user.id);
+  
+  // Generate unique channel ID and webhook URL
+  const channelId = generateChannelId();
+  const webhookUrl = `${process.env.APP_URL}/api/google-calendar/webhook`;
+  
+  // Register the webhook with Google Calendar
+  const response = await calendar.events.watch({
+    calendarId,
+    requestBody: {
+      id: channelId,
+      type: 'web_hook',
+      address: webhookUrl,
+      token: process.env.WEBHOOK_SECRET,
+      params: {
+        ttl: '604800' // 7 days in seconds
+      }
+    }
+  });
+
+  // Save webhook details to user
+  await User.findByIdAndUpdate(req.user.id, {
+    $push: {
+      calendarWebhooks: {
+        channelId,
+        resourceId: response.data.resourceId,
+        calendarId,
+        expiration: new Date(parseInt(response.data.expiration, 10))
+      }
+    }
+  });
+
+  res.status(200).json({ 
+    success: true, 
+    message: 'Webhook registered successfully',
+    data: {
+      channelId,
+      resourceId: response.data.resourceId,
+      expiration: response.data.expiration
+    }
+  });
+});
+
+/**
+ * @route POST /api/google-calendar/unregister-webhook
+ * @desc Unregister webhook for Google Calendar notifications
+ */
+exports.unregisterWebhook = asyncHandler(async (req, res) => {
+  const { channelId, resourceId } = req.body;
+  const calendar = await getCalendarClient(req.user.id);
+  
+  try {
+    // Stop the notification channel
+    await calendar.channels.stop({
+      requestBody: {
+        id: channelId,
+        resourceId
+      }
+    });
+  } catch (error) {
+    console.error('Error stopping channel:', error);
+    // Channel may have already expired, continue with cleanup
+  }
+
+  // Remove webhook from user's record
+  await User.findByIdAndUpdate(req.user.id, {
+    $pull: {
+      calendarWebhooks: { channelId }
+    }
+  });
+
+  res.status(200).json({ 
+    success: true, 
+    message: 'Webhook unregistered successfully'
+  });
+});
 
 /**
  * @route GET /api/google-calendar/calendars
