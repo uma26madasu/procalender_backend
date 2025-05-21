@@ -69,13 +69,13 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.error('MongoDB connection error:', err));
+// Set strictQuery option before connecting
+mongoose.set('strictQuery', false);
+
+// Connect to MongoDB with simplified connection
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
 // Safely import route files that definitely exist
 // Check if auth.js exists before importing
