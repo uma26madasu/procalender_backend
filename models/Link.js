@@ -1,21 +1,30 @@
 const mongoose = require('mongoose');
+const validator = require('validator');
 
 /**
- * Custom question schema for additional information
- * collected during booking
+ * Custom question schema with comprehensive validation
  */
 const questionSchema = new mongoose.Schema({
   id: {
     type: String,
-    required: true
+    required: [true, 'Question ID is required'],
+    trim: true,
+    match: [/^[a-z0-9-]+$/, 'Question ID can only contain lowercase letters, numbers, and hyphens']
   },
   label: {
     type: String,
-    required: true
+    required: [true, 'Question label is required'],
+    trim: true,
+    minlength: [3, 'Question label must be at least 3 characters'],
+    maxlength: [100, 'Question label cannot exceed 100 characters']
   },
   type: {
     type: String,
-    enum: ['text', 'textarea', 'select', 'radio', 'checkbox'],
+    required: [true, 'Question type is required'],
+    enum: {
+      values: ['text', 'textarea', 'select', 'radio', 'checkbox'],
+      message: 'Question type must be one of: text, textarea, select, radio, checkbox'
+    },
     default: 'text'
   },
   required: {
@@ -24,141 +33,269 @@ const questionSchema = new mongoose.Schema({
   },
   options: {
     type: [String],
+    validate: {
+      validator: function(options) {
+        // Options are required for select, radio, and checkbox types
+        if (['select', 'radio', 'checkbox'].includes(this.type)) {
+          return options && options.length > 0;
+        }
+        return true;
+      },
+      message: 'Options are required for select, radio, and checkbox question types'
+    },
     default: []
   }
 }, { _id: false });
 
 /**
- * Scheduling link schema - represents a shareable link that
- * allows clients to book specific types of meetings
+ * Scheduling link schema with comprehensive validation
  */
 const linkSchema = new mongoose.Schema({
-  // The user who owns this scheduling link
   ownerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: [true, 'Owner ID is required'],
+    validate: {
+      validator: async function(value) {
+        // Check if the referenced user exists
+        const user = await mongoose.model('User').findById(value);
+        return user !== null;
+      },
+      message: 'Referenced user does not exist'
+    }
   },
   
-  // Unique identifier for this link (used in the URL)
   linkId: {
     type: String,
-    required: true,
-    unique: true
+    required: [true, 'Link ID is required'],
+    unique: true,
+    trim: true,
+    lowercase: true,
+    match: [/^[a-z0-9-]+$/, 'Link ID can only contain lowercase letters, numbers, and hyphens'],
+    minlength: [4, 'Link ID must be at least 4 characters'],
+    maxlength: [50, 'Link ID cannot exceed 50 characters']
   },
   
-  // Name of the meeting type (e.g., "Initial Consultation")
   meetingName: {
     type: String,
-    required: true
+    required: [true, 'Meeting name is required'],
+    trim: true,
+    minlength: [3, 'Meeting name must be at least 3 characters'],
+    maxlength: [100, 'Meeting name cannot exceed 100 characters']
   },
   
-  // Length of the meeting in minutes
   meetingLength: {
     type: Number,
-    required: true,
-    min: 15,
-    max: 240
+    required: [true, 'Meeting length is required'],
+    min: [5, 'Meeting length must be at least 5 minutes'],
+    max: [240, 'Meeting length cannot exceed 240 minutes']
   },
   
-  // Description of the meeting
   description: {
     type: String,
-    default: ''
+    trim: true,
+    maxlength: [500, 'Description cannot exceed 500 characters']
   },
   
-  // Location info (virtual, in-person, etc.)
   location: {
     type: String,
-    default: 'Virtual'
+    default: 'Virtual',
+    validate: {
+      validator: function(value) {
+        // Basic validation for common location formats
+        return /^[a-zA-Z0-9\s,.-]+$/.test(value) || 
+               validator.isURL(value, { require_protocol: true });
+      },
+      message: 'Location must be a valid address or URL'
+    }
   },
   
-  // Custom questions to ask during booking
   questions: {
     type: [questionSchema],
+    validate: {
+      validator: function(questions) {
+        // Limit the number of custom questions
+        return questions.length <= 10;
+      },
+      message: 'Maximum of 10 custom questions allowed'
+    },
     default: []
   },
   
-  // Optional expiration date
   expirationDate: {
-    type: Date
+    type: Date,
+    validate: {
+      validator: function(value) {
+        if (!value) return true;
+        return value > new Date();
+      },
+      message: 'Expiration date must be in the future'
+    }
   },
   
-  // Maximum number of bookings allowed (0 = unlimited)
   usageLimit: {
     type: Number,
-    default: 0
+    default: 0,
+    min: [0, 'Usage limit cannot be negative']
   },
   
-  // Number of times this link has been used
   usageCount: {
     type: Number,
-    default: 0
+    default: 0,
+    min: [0, 'Usage count cannot be negative']
   },
   
-  // Whether this link is active
   active: {
     type: Boolean,
     default: true
   },
   
-  // Buffer time before meeting in minutes
   bufferBefore: {
     type: Number,
-    default: 0
+    default: 0,
+    min: [0, 'Buffer time cannot be negative'],
+    max: [120, 'Buffer time cannot exceed 120 minutes']
   },
   
-  // Buffer time after meeting in minutes
   bufferAfter: {
     type: Number,
-    default: 0
+    default: 0,
+    min: [0, 'Buffer time cannot be negative'],
+    max: [120, 'Buffer time cannot exceed 120 minutes']
   },
   
-  // Maximum days in advance that can be booked
   maxAdvanceDays: {
     type: Number,
     default: 14,
-    min: 1,
-    max: 365
+    min: [1, 'Maximum advance days must be at least 1'],
+    max: [365, 'Maximum advance days cannot exceed 365']
   },
 
-  // Approval flow settings
   requiresApproval: {
     type: Boolean,
     default: false
   },
   
-  // Users who can approve bookings (empty array means owner approves)
-  approvers: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
+  approvers: {
+    type: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      validate: {
+        validator: async function(value) {
+          // Check if the referenced approver exists
+          const user = await mongoose.model('User').findById(value);
+          return user !== null;
+        },
+        message: 'Referenced approver does not exist'
+      }
+    }],
+    validate: {
+      validator: function(approvers) {
+        // If approval is required, there should be at least one approver
+        if (this.requiresApproval && approvers.length === 0) {
+          return false;
+        }
+        return true;
+      },
+      message: 'At least one approver is required when approval is needed'
+    }
+  },
 
-  // Creation and update timestamps
+  notificationEmail: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    validate: {
+      validator: function(value) {
+        if (!value) return true;
+        return validator.isEmail(value);
+      },
+      message: 'Please provide a valid notification email'
+    }
+  },
+
+  color: {
+    type: String,
+    default: '#3498db',
+    validate: {
+      validator: function(val) {
+        return /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(val);
+      },
+      message: 'Please provide a valid hex color code'
+    }
+  },
+
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    immutable: true
   },
   
   updatedAt: {
     type: Date,
     default: Date.now
   }
+}, {
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    transform: function(doc, ret) {
+      delete ret.__v;
+      return ret;
+    }
+  },
+  toObject: {
+    virtuals: true
+  }
 });
 
-// Generate a unique link ID if not provided
+// Pre-save hooks
 linkSchema.pre('save', function(next) {
+  // Generate linkId if not provided
   if (!this.linkId) {
     this.linkId = Math.random().toString(36).substring(2, 10);
   }
-  
+
+  // Ensure notification email is lowercase and trimmed
+  if (this.notificationEmail) {
+    this.notificationEmail = this.notificationEmail.toLowerCase().trim();
+  }
+
+  // Update the timestamp
   this.updatedAt = Date.now();
   next();
+});
+
+// Error handling for duplicate linkId
+linkSchema.post('save', function(error, doc, next) {
+  if (error.name === 'MongoServerError' && error.code === 11000) {
+    next(new Error('This link ID is already in use. Please choose a different one.'));
+  } else {
+    next(error);
+  }
 });
 
 // Indexes for better query performance
 linkSchema.index({ ownerId: 1 });
 linkSchema.index({ linkId: 1 }, { unique: true });
 linkSchema.index({ active: 1, expirationDate: 1 });
+linkSchema.index({ meetingName: 'text', description: 'text' });
+
+// Virtual for checking if link is expired
+linkSchema.virtual('isExpired').get(function() {
+  return this.expirationDate && this.expirationDate < new Date();
+});
+
+// Virtual for checking if link has reached usage limit
+linkSchema.virtual('hasReachedLimit').get(function() {
+  return this.usageLimit > 0 && this.usageCount >= this.usageLimit;
+});
+
+// Method to check if link is available for booking
+linkSchema.methods.isAvailable = function() {
+  return this.active && 
+         !this.isExpired && 
+         !this.hasReachedLimit;
+};
 
 module.exports = mongoose.model('Link', linkSchema);
