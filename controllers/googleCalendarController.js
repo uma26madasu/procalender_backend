@@ -2,6 +2,8 @@ const { google } = require('googleapis');
 const { User, Booking } = require('../models');
 const asyncHandler = require('../middleware/asyncHandler');
 const crypto = require('crypto');
+const { verifyWebhook } = require('../utils/webhookVerifier');
+const calendarService = require('../services/calendarService');
 
 // Configure Google OAuth client
 const oauth2Client = new google.auth.OAuth2(
@@ -258,49 +260,82 @@ exports.deleteEvent = asyncHandler(async (req, res) => {
  * @route POST /api/google-calendar/webhook
  * @desc Handle Google Calendar push notifications
  */
-exports.handleWebhook = asyncHandler(async (req, res) => {
+exports.handleWebhook = async (req, res) => {
   // Immediate response required by Google
   res.status(200).end();
-
-  const token = req.headers['x-goog-channel-token'];
-  if (token !== process.env.WEBHOOK_SECRET) return;
-
+  
+  // Validate webhook request
+  if (!verifyWebhook(req.headers, req.body)) {
+    console.error('Invalid webhook request');
+    return;
+  }
+  
   const channelId = req.headers['x-goog-channel-id'];
   const resourceState = req.headers['x-goog-resource-state'];
-
-  if (resourceState === 'exists') {
-    await processCalendarUpdate(channelId);
-  }
-});
-
-// Helper function to process calendar updates
-async function processCalendarUpdate(channelId) {
+  const resourceId = req.headers['x-goog-resource-id'];
+  
+  // Process different notification types
   try {
+    // Find the user associated with this webhook
     const user = await User.findOne({ 'calendarWebhooks.channelId': channelId });
-    if (!user) return;
-
+    if (!user) {
+      console.error(`No user found for webhook channel ${channelId}`);
+      return;
+    }
+    
     const webhook = user.calendarWebhooks.find(wh => wh.channelId === channelId);
     if (!webhook) return;
+    
+    switch (resourceState) {
+      case 'sync':
+        // Initial sync message
+        console.log(`Webhook sync initiated for channel ${channelId}`);
+        break;
+        
+      case 'exists':
+        // Calendar updated - process changes
+        await processCalendarUpdate(user._id, webhook.calendarId);
+        break;
+        
+      case 'not_exists':
+        // Resource deleted or expired
+        console.log(`Resource no longer exists for channel ${channelId}`);
+        // Clean up expired webhook
+        await User.findByIdAndUpdate(user._id, {
+          $pull: { calendarWebhooks: { channelId } }
+        });
+        break;
+        
+      default:
+        console.log(`Unknown resource state: ${resourceState}`);
+    }
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+  }
+};
 
-    const calendar = await getCalendarClient(user._id);
+// Updated helper function to process calendar updates
+async function processCalendarUpdate(userId, calendarId) {
+  try {
+    const calendar = await getCalendarClient(userId);
     const response = await calendar.events.list({
-      calendarId: webhook.calendarId,
+      calendarId,
       updatedMin: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
       singleEvents: true,
       timeMin: new Date().toISOString() // Only check future events
     });
 
-    await checkBookingConflicts(user, response.data.items);
+    await checkBookingConflicts(userId, response.data.items);
   } catch (error) {
     console.error('Error processing calendar update:', error);
     // Consider adding retry logic for transient errors
   }
 }
 
-// Helper function to check for booking conflicts
-async function checkBookingConflicts(user, events) {
+// Updated helper function to check for booking conflicts
+async function checkBookingConflicts(userId, events) {
   const bookings = await Booking.find({
-    ownerId: user._id,
+    ownerId: userId,
     startTime: { $gt: new Date() },
     status: { $in: ['confirmed', 'pending'] }
   });
