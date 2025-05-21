@@ -1,9 +1,9 @@
-// Safe server.js
+// server.js with MongoDB native driver
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const mongoose = require('mongoose');
+const { MongoClient, ServerApiVersion } = require('mongodb');
 require('dotenv').config();
 
 // Initialize the Express app
@@ -48,6 +48,29 @@ app.use(cors({
 // Parse JSON request bodies
 app.use(express.json());
 
+// MongoDB Connection
+const uri = "mongodb+srv://umamadasu:Impala%40007@cluster0.h4opqie.mongodb.net/procalender?retryWrites=true&w=majority&appName=Cluster0";
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
+
+// Connect to MongoDB
+async function connectToMongoDB() {
+  try {
+    await client.connect();
+    await client.db("admin").command({ ping: 1 });
+    console.log("Connected to MongoDB successfully!");
+    return client.db("procalender"); // Return the database instance
+  } catch (error) {
+    console.error("MongoDB connection error:", error);
+    throw error;
+  }
+}
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({
@@ -69,52 +92,87 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Set strictQuery option before connecting
-mongoose.set('strictQuery', false);
-
-// Connect to MongoDB with simplified connection
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
-// Safely import route files that definitely exist
-// Check if auth.js exists before importing
-try {
-  if (fs.existsSync(path.join(routesPath, 'auth.js'))) {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('Successfully loaded auth routes');
+// MongoDB test endpoint
+app.get('/api/mongodb-test', async (req, res) => {
+  try {
+    const db = client.db("procalender");
+    const collections = await db.listCollections().toArray();
+    res.json({
+      success: true,
+      message: 'MongoDB connection successful',
+      collections: collections.map(c => c.name)
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'MongoDB connection failed',
+      error: error.message
+    });
   }
-} catch (error) {
-  console.error('Error loading auth routes:', error.message);
+});
+
+// Initialize the app after connecting to MongoDB
+async function initializeApp() {
+  try {
+    // Connect to MongoDB first
+    const db = await connectToMongoDB();
+    
+    // Attach db to app for use in routes
+    app.locals.db = db;
+    
+    // Safely import route files that definitely exist
+    try {
+      if (fs.existsSync(path.join(routesPath, 'auth.js'))) {
+        const authRoutes = require('./routes/auth');
+        app.use('/api/auth', authRoutes);
+        console.log('Successfully loaded auth routes');
+      }
+    } catch (error) {
+      console.error('Error loading auth routes:', error.message);
+    }
+
+    // Check if googleCalendarRoutes.js exists before importing
+    try {
+      if (fs.existsSync(path.join(routesPath, 'googleCalendarRoutes.js'))) {
+        const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
+        app.use('/api/google-calendar', googleCalendarRoutes);
+        console.log('Successfully loaded Google Calendar routes');
+      }
+    } catch (error) {
+      console.error('Error loading Google Calendar routes:', error.message);
+    }
+
+    // Placeholder routes for endpoints that aren't implemented yet
+    app.get('/api/windows', (req, res) => {
+      res.json({ message: 'Windows API endpoint - Coming soon' });
+    });
+
+    app.get('/api/bookings', (req, res) => {
+      res.json({ message: 'Bookings API endpoint - Coming soon' });
+    });
+
+    app.get('/api/links', (req, res) => {
+      res.json({ message: 'Links API endpoint - Coming soon' });
+    });
+
+    // Start the server
+    const PORT = process.env.PORT || 10000;
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+    
+  } catch (error) {
+    console.error("Failed to initialize app:", error);
+    process.exit(1);
+  }
 }
 
-// Check if googleCalendarRoutes.js exists before importing
-try {
-  if (fs.existsSync(path.join(routesPath, 'googleCalendarRoutes.js'))) {
-    const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
-    app.use('/api/google-calendar', googleCalendarRoutes);
-    console.log('Successfully loaded Google Calendar routes');
-  }
-} catch (error) {
-  console.error('Error loading Google Calendar routes:', error.message);
-}
+// Start the application
+initializeApp();
 
-// Placeholder routes for endpoints that aren't implemented yet
-app.get('/api/windows', (req, res) => {
-  res.json({ message: 'Windows API endpoint - Coming soon' });
-});
-
-app.get('/api/bookings', (req, res) => {
-  res.json({ message: 'Bookings API endpoint - Coming soon' });
-});
-
-app.get('/api/links', (req, res) => {
-  res.json({ message: 'Links API endpoint - Coming soon' });
-});
-
-// Start the server
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Handle process termination
+process.on('SIGINT', async () => {
+  await client.close();
+  console.log('MongoDB connection closed');
+  process.exit(0);
 });
