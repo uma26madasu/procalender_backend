@@ -1,6 +1,4 @@
-const Booking = require('../models/bookingModel');
-const User = require('../models/userModel');
-const BookingLink = require('../models/linkModel');
+const { Booking, User, Link: BookingLink } = require('../models');
 const notificationService = require('../services/notificationService');
 const calendarService = require('../services/calendarService');
 

@@ -1,8 +1,39 @@
-// Add these methods to your existing calendarService.js
+// services/calendarService.js
+const axios = require('axios');
+const { google } = require('googleapis');
+const User = require('../models/User');
+const { refreshGoogleToken } = require('../utils/tokenManager');
 
-// Create a calendar event (supports both confirmed and tentative events)
-exports.createEvent = async (calendarId, eventData, isTentative = false) => {
+// Create an axios instance with auth token handling
+const createAxiosWithAuth = (accessToken) => {
+  return axios.create({
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+};
+
+/**
+ * Create a calendar event (supports both confirmed and tentative events)
+ * @param {String} calendarId - Calendar ID (typically 'primary')
+ * @param {Object} eventData - Calendar event details
+ * @param {Boolean} isTentative - Whether this is a tentative event
+ */
+exports.createEvent = async (userId, calendarId, eventData, isTentative = false) => {
   try {
+    // Get user with Google tokens
+    const user = await User.findById(userId);
+    if (!user || !user.googleTokens) {
+      throw new Error('Google Calendar not connected');
+    }
+    
+    // Check if token needs refresh
+    const tokens = await refreshGoogleToken(user);
+    
+    // Create authorized axios instance
+    const axiosWithAuth = createAxiosWithAuth(tokens.access_token);
+    
     // If tentative, adjust the event properties
     if (isTentative) {
       eventData.status = 'tentative';
@@ -26,9 +57,26 @@ exports.createEvent = async (calendarId, eventData, isTentative = false) => {
   }
 };
 
-// Update a tentative event to confirmed
-exports.confirmEvent = async (calendarId, eventId) => {
+/**
+ * Update a tentative event to confirmed
+ * @param {String} userId - User ID
+ * @param {String} calendarId - Calendar ID
+ * @param {String} eventId - Event ID to confirm
+ */
+exports.confirmEvent = async (userId, calendarId, eventId) => {
   try {
+    // Get user with Google tokens
+    const user = await User.findById(userId);
+    if (!user || !user.googleTokens) {
+      throw new Error('Google Calendar not connected');
+    }
+    
+    // Check if token needs refresh
+    const tokens = await refreshGoogleToken(user);
+    
+    // Create authorized axios instance
+    const axiosWithAuth = createAxiosWithAuth(tokens.access_token);
+    
     const response = await axiosWithAuth.patch(
       `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${eventId}`,
       {
@@ -45,9 +93,26 @@ exports.confirmEvent = async (calendarId, eventId) => {
   }
 };
 
-// Delete an event (used when rejecting a booking)
-exports.deleteEvent = async (calendarId, eventId) => {
+/**
+ * Delete an event (used when rejecting a booking)
+ * @param {String} userId - User ID
+ * @param {String} calendarId - Calendar ID
+ * @param {String} eventId - Event ID to delete
+ */
+exports.deleteEvent = async (userId, calendarId, eventId) => {
   try {
+    // Get user with Google tokens
+    const user = await User.findById(userId);
+    if (!user || !user.googleTokens) {
+      throw new Error('Google Calendar not connected');
+    }
+    
+    // Check if token needs refresh
+    const tokens = await refreshGoogleToken(user);
+    
+    // Create authorized axios instance
+    const axiosWithAuth = createAxiosWithAuth(tokens.access_token);
+    
     const response = await axiosWithAuth.delete(
       `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${eventId}`
     );

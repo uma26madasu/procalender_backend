@@ -1,5 +1,5 @@
 // controllers/windowController.js
-const Window = require('../models/Window');
+const { Window } = require('../models');
 
 // Get all availability windows for a user
 exports.getWindows = async (req, res) => {

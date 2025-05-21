@@ -1,7 +1,5 @@
 // services/availabilityService.js
-const Window = require('../models/Window');
-const Booking = require('../models/Booking');
-const User = require('../models/User');
+const { Window, Booking, User } = require('../models');
 const { google } = require('googleapis');
 
 // Configure OAuth client

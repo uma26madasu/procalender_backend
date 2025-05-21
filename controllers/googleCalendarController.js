@@ -1,6 +1,5 @@
 // controllers/googleCalendarController.js
-const User = require('../models/User');
-const Booking = require('../models/Booking');
+const { User, Booking } = require('../models');
 const calendarService = require('../services/calendarService');
 const { google } = require('googleapis');
 

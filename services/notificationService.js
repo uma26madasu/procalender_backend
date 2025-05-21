@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const User = require('../models/userModel');
+const { User } = require('../models');
 
 // Configure email transport (replace with your email service)
 const transporter = nodemailer.createTransport({

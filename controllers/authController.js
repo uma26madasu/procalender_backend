@@ -1,6 +1,6 @@
 // /controllers/authController.js
 const { google } = require('googleapis');
-const User = require('../models/User');
+const { User } = require('../models');
 
 // Configure Google OAuth client
 const oauth2Client = new google.auth.OAuth2(
