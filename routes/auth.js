@@ -7,7 +7,7 @@ const authController = require('../controllers/authController');
 router.get('/google/url', authController.getGoogleAuthUrl);
 
 // Handle OAuth callback from Google
-router.post('/google/callback', authController.handleGoogleCallback);
+router.get('/google/callback', authController.handleGoogleCallback);
 
 // Revoke Google access
 router.post('/google/revoke', authController.revokeGoogleAccess);
