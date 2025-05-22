@@ -1,6 +1,35 @@
+// /controllers/authController.js
+const { google } = require('googleapis');
+const { User } = require('../models');
+
+// Configure Google OAuth client
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+// Set OAuth scopes
+const SCOPES = [
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile'
+];
+
+exports.getGoogleAuthUrl = (req, res) => {
+  // Generate a URL for OAuth consent
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: SCOPES,
+    prompt: 'consent'  // Force to always show consent screen to get refresh_token
+  });
+  
+  res.json({ success: true, url: authUrl });
+};
+
 exports.handleGoogleCallback = async (req, res) => {
   try {
-    const { code, state } = req.query; // GET from query params, not body
+    const { code } = req.query; // Changed from req.body to req.query
     
     if (!code) {
       return res.status(400).json({ 
@@ -19,7 +48,7 @@ exports.handleGoogleCallback = async (req, res) => {
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
     
-    // Create or find user by email (since we don't have userId yet)
+    // Create or find user by email
     let user = await User.findOne({ email: userInfo.data.email });
     
     if (!user) {
@@ -43,5 +72,55 @@ exports.handleGoogleCallback = async (req, res) => {
     console.error('OAuth callback error:', error);
     // Redirect to frontend with error
     res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=connection_failed`);
+  }
+};
+
+exports.revokeGoogleAccess = async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing userId' 
+      });
+    }
+    
+    // Find user
+    const user = await User.findById(userId);
+    
+    if (!user || !user.googleTokens) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User or tokens not found' 
+      });
+    }
+    
+    // Revoke access
+    const tokens = user.googleTokens;
+    if (tokens.access_token) {
+      try {
+        await oauth2Client.revokeToken(tokens.access_token);
+      } catch (revokeError) {
+        console.error('Token revocation error:', revokeError);
+        // Continue even if revocation fails
+      }
+    }
+    
+    // Remove tokens from user
+    user.googleTokens = undefined;
+    user.googleEmail = undefined;
+    await user.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Google Calendar disconnected successfully' 
+    });
+  } catch (error) {
+    console.error('Revoke access error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to disconnect Google Calendar' 
+    });
   }
 };
