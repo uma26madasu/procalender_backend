@@ -40,7 +40,7 @@ dirLog(middlewarePath, 'Middleware');
 
 // Enable CORS
 app.use(cors({
-  origin: ['https://procalender-frontend.vercel.app', 'http://localhost:3000'],
+  origin: ['https://procalender-frontend.vercel.app','https://procalender-frontend-uma26madasus-projects.vercel.app', 'http://localhost:3000'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
