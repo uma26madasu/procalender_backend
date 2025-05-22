@@ -184,3 +184,12 @@ process.on('SIGINT', async () => {
   console.log('MongoDB connection closed');
   process.exit(0);
 });
+
+// Temporary debug endpoint - REMOVE AFTER TESTING
+app.get('/api/debug/env', (req, res) => {
+  res.json({
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
+    NODE_ENV: process.env.NODE_ENV
+  });
+});
