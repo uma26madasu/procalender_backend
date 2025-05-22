@@ -11,5 +11,7 @@ router.get('/google/callback', authController.handleGoogleCallback);
 
 // Revoke Google access
 router.post('/google/revoke', authController.revokeGoogleAccess);
+// Add this line to your routes/auth.js
+router.get('/google/status', authController.getConnectionStatus);
 
 module.exports = router;
