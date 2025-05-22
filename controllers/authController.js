@@ -1,6 +1,5 @@
 // /controllers/authController.js
 const { google } = require('googleapis');
-const { User } = require('../models');
 
 // Configure Google OAuth client
 const oauth2Client = new google.auth.OAuth2(
@@ -29,13 +28,11 @@ exports.getGoogleAuthUrl = (req, res) => {
 
 exports.handleGoogleCallback = async (req, res) => {
   try {
-    const { code } = req.query; // Changed from req.body to req.query
+    const { code } = req.query;
     
     if (!code) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing authorization code' 
-      });
+      console.error('No authorization code provided');
+      return res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=no_code`);
     }
     
     // Exchange code for tokens
@@ -48,30 +45,38 @@ exports.handleGoogleCallback = async (req, res) => {
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
     
-    // Create or find user by email
-    let user = await User.findOne({ email: userInfo.data.email });
+    // Get database from app locals (set in server.js)
+    const db = req.app.locals.db;
+    const usersCollection = db.collection('users');
     
-    if (!user) {
-      // Create new user if doesn't exist
-      user = new User({
-        email: userInfo.data.email,
-        name: userInfo.data.name || userInfo.data.email
-      });
-    }
+    // Create or update user
+    const userData = {
+      email: userInfo.data.email,
+      name: userInfo.data.name || userInfo.data.email,
+      googleTokens: tokens,
+      googleEmail: userInfo.data.email,
+      updatedAt: new Date()
+    };
     
-    // Store tokens securely
-    user.googleTokens = tokens;
-    user.googleEmail = userInfo.data.email;
+    // Use upsert to create or update
+    await usersCollection.updateOne(
+      { email: userInfo.data.email },
+      { 
+        $set: userData,
+        $setOnInsert: { createdAt: new Date() }
+      },
+      { upsert: true }
+    );
     
-    await user.save();
+    console.log('User tokens saved successfully for:', userInfo.data.email);
     
     // Redirect to frontend with success
-    res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?connected=true`);
+    res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?connected=true&email=${encodeURIComponent(userInfo.data.email)}`);
     
   } catch (error) {
     console.error('OAuth callback error:', error);
     // Redirect to frontend with error
-    res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=connection_failed`);
+    res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=connection_failed&details=${encodeURIComponent(error.message)}`);
   }
 };
 
@@ -86,8 +91,13 @@ exports.revokeGoogleAccess = async (req, res) => {
       });
     }
     
+    // Get database from app locals
+    const db = req.app.locals.db;
+    const usersCollection = db.collection('users');
+    const { ObjectId } = require('mongodb');
+    
     // Find user
-    const user = await User.findById(userId);
+    const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
     
     if (!user || !user.googleTokens) {
       return res.status(404).json({ 
@@ -108,9 +118,18 @@ exports.revokeGoogleAccess = async (req, res) => {
     }
     
     // Remove tokens from user
-    user.googleTokens = undefined;
-    user.googleEmail = undefined;
-    await user.save();
+    await usersCollection.updateOne(
+      { _id: new ObjectId(userId) },
+      { 
+        $unset: { 
+          googleTokens: "",
+          googleEmail: ""
+        },
+        $set: {
+          updatedAt: new Date()
+        }
+      }
+    );
     
     res.json({ 
       success: true, 
@@ -120,7 +139,7 @@ exports.revokeGoogleAccess = async (req, res) => {
     console.error('Revoke access error:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Failed to disconnect Google Calendar' 
+      message: 'Failed to disconnect Google Calendar'
     });
   }
 };
