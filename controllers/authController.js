@@ -171,7 +171,7 @@ exports.getConnectionStatus = asyncHandler(async (req, res) => {
     }
 
     // Check if user has Google tokens (specifically, a refresh token)
-    const isConnected = !!(user.googleTokens && user.googleTokens.refreshToken);
+    const isConnected = !!(user.googleTokens && user.googleTokens.accessToken);
     const email = isConnected && user.email ? user.email : ''; // Use user's email from DB
 
     res.json({
