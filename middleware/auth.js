@@ -1,68 +1,43 @@
-// middleware/auth.js
+// src/middleware/auth.js
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
-const { errorResponse } = require('../utils/errorHandler');
+const asyncHandler = require('./asyncHandler'); // Assuming asyncHandler is also in middleware
+const User = require('../models/User'); // Import your User model
 
-/**
- * Protect routes - Middleware to verify user is authenticated
- */
-exports.protect = async (req, res, next) => {
-  try {
-    let token;
-    
-    // Check for token in Authorization header with Bearer prefix
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-    
-    // If no token found
-    if (!token) {
-      return errorResponse(res, 401, 'Access denied. No token provided');
-    }
-    
-    try {
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      
-      // Find user by id from token
-      const user = await User.findById(decoded.id);
-      
-      if (!user) {
-        return errorResponse(res, 401, 'User not found');
-      }
-      
-      // Attach user to request object
-      req.user = user;
-      next();
-    } catch (error) {
-      if (error.name === 'TokenExpiredError') {
-        return errorResponse(res, 401, 'Token expired');
-      }
-      return errorResponse(res, 401, 'Invalid token');
-    }
-  } catch (error) {
-    console.error('Auth middleware error:', error);
-    return errorResponse(res, 500, 'Server error in authentication');
+exports.protect = asyncHandler(async (req, res, next) => {
+  let token;
+
+  // Check for token in headers
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
   }
-};
 
-/**
- * Admin only routes
- */
-exports.adminOnly = async (req, res, next) => {
+  // If no token, or if using cookies, check for token in cookies
+  // else if (req.cookies.token) {
+  //   token = req.cookies.token;
+  // }
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Not authorized to access this route. No token.' });
+  }
+
   try {
-    // First ensure the user is authenticated
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Attach user to the request (e.g., from Firebase UID)
+    // Assuming your JWT payload contains `uid` or `firebaseUid`
+    req.user = await User.findOne({ firebaseUid: decoded.uid || decoded.firebaseUid }); // Adjust based on your JWT payload field for UID
+
     if (!req.user) {
-      return errorResponse(res, 401, 'Access denied. Not authenticated');
+      return res.status(401).json({ success: false, message: 'Not authorized, user not found.' });
     }
-    
-    // Check if user is an admin
-    if (!req.user.isAdmin) {
-      return errorResponse(res, 403, 'Access denied. Admin privileges required');
-    }
-    
+
     next();
   } catch (error) {
-    return errorResponse(res, 500, 'Server error', error);
+    console.error('Token verification error:', error.message);
+    if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({ success: false, message: 'Token expired. Please log in again.', expired: true });
+    }
+    res.status(401).json({ success: false, message: 'Not authorized to access this route. Token failed.' });
   }
-};
+});
