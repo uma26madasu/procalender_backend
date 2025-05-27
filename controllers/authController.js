@@ -1,10 +1,10 @@
 // src/controllers/authController.js
 const { google } = require('googleapis');
-const User = require('../models/User'); // <--- IMPORT YOUR USER MODEL
-const asyncHandler = require('../middleware/asyncHandler'); // Assuming you use this middleware
+const User = require('../models/User'); // Assuming your User model is here
+const asyncHandler = require('../middleware/asyncHandler'); // Make sure you have this middleware
+const { refreshGoogleToken } = require('../utils/tokenManager'); // Make sure this is imported
 
 // Configure Google OAuth client
-// Ensure this oauth2Client is consistent with the one in tokenManager.js
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -14,104 +14,81 @@ const oauth2Client = new google.auth.OAuth2(
 // Set OAuth scopes
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/calendar.events', // Make sure this is included for full event management
   'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile' // To get user's name
+  'https://www.googleapis.com/auth/userinfo.profile'
 ];
 
-/**
- * @route GET /api/auth/google/url
- * @desc Generate Google OAuth consent URL
- */
-exports.getGoogleAuthUrl = (req, res) => {
+exports.getGoogleAuthUrl = asyncHandler(async (req, res) => {
+  // Ensure the redirect URI is correct for your frontend deployment
   const authUrl = oauth2Client.generateAuthUrl({
-    access_type: 'offline', // Critical for getting a refresh token
+    access_type: 'offline',
     scope: SCOPES,
     prompt: 'consent' // Force to always show consent screen to get refresh_token
   });
+
   res.json({ success: true, url: authUrl });
-};
+});
 
-/**
- * @route GET /api/auth/google/callback
- * @desc Handle Google OAuth callback after user consent
- */
 exports.handleGoogleCallback = asyncHandler(async (req, res) => {
+  console.log('=== OAuth Callback Started ===');
+  console.log('Query params:', req.query);
+
+  const { code } = req.query;
+
+  if (!code) {
+    console.error('No authorization code provided');
+    return res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Google%20auth%20failed&type=error`);
+  }
+
   try {
-    console.log('=== OAuth Callback Started ===');
-    console.log('Query params:', req.query);
-
-    const { code } = req.query;
-
-    if (!code) {
-      console.error('No authorization code provided');
-      return res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=No authorization code provided&type=error`);
-    }
-
     const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens); // Set credentials for fetching user info
+    oauth2Client.setCredentials(tokens);
 
     // Get user info from Google
-    const oauth2 = google.oauth2({
-      auth: oauth2Client,
-      version: 'v2',
-    });
-    const { data: userData } = await oauth2.userinfo.get();
-    const googleEmail = userData.email;
-    const googleName = userData.name; // Get name from Google profile
+    const { data: { email, name, picture } } = await google.oauth2({ version: 'v2', auth: oauth2Client }).userinfo.get();
 
-    // Get Firebase UID from authenticated request (assuming Firebase Auth middleware populates req.user)
-    const firebaseUid = req.user ? req.user.uid : null;
+    // Find the user by Firebase UID from the authenticated token
+    const firebaseUid = req.user ? req.user.uid : null; // This should be available from authenticateToken middleware
 
     if (!firebaseUid) {
-      console.error('Firebase UID not found in auth callback. User must be logged in via Firebase.');
-      return res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Authentication failed: User not logged in via Firebase.&type=error`);
+      console.error('Firebase UID not found in request during Google callback');
+      return res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Authentication%20error&type=error`);
     }
 
-    // Find user by firebaseUid, or create if not exists
     let user = await User.findOne({ firebaseUid: firebaseUid });
 
     if (!user) {
-      // Create new user if not found, linking Firebase UID and Google email/name
+      // Create new user if not found
       user = new User({
         firebaseUid: firebaseUid,
-        email: googleEmail,
-        name: googleName || 'Google User', // Use Google name or default
-        // Add other default fields for new user if necessary
+        email: email,
+        name: name,
+        profilePicture: picture,
+        googleTokens: tokens,
+        lastLogin: new Date()
       });
-      console.log(`New user created with Firebase UID: ${firebaseUid}`);
-    } else if (user.email !== googleEmail) {
-      // Optional: Update user's email if it changed (e.g., if linking a different Google account)
-      console.log(`Updating email for user ${firebaseUid} from ${user.email} to ${googleEmail}`);
-      user.email = googleEmail;
+    } else {
+      // Update existing user's Google tokens and profile info
+      user.email = email; // Update email in case it changed or wasn't set
+      user.name = name;
+      user.profilePicture = picture;
+      user.googleTokens = tokens;
+      user.lastLogin = new Date();
     }
 
-    // Store Google Calendar tokens directly on the User model
-    user.googleTokens = {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiryDate: new Date(tokens.expiry_date || new Date().getTime() + tokens.expires_in * 1000), // Ensure it's a Date object
-      scope: tokens.scope,
-      tokenType: tokens.token_type,
-      idToken: tokens.id_token || null,
-    };
-    await user.save(); // Save the updated user document with tokens
+    await user.save();
 
-    console.log(`Google Calendar tokens stored/updated for user: ${firebaseUid}`);
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Google Calendar connected successfully!&type=success`);
+    console.log('Google sign-in successful for user:', email);
+    res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Google%20Calendar%20connected%20successfully!&type=success`);
+
   } catch (error) {
-    console.error('Error during Google OAuth callback:', error);
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Failed to connect Google Calendar: ${error.message || 'unknown error'}.&type=error`);
+    console.error('Error handling Google callback:', error);
+    res.redirect(`${process.env.FRONTEND_URL}/dashboard?message=Failed%20to%20connect%20Google%20Calendar&type=error`);
   }
 });
 
-/**
- * @route POST /api/auth/google/revoke
- * @desc Disconnect Google Calendar for the authenticated user
- */
-exports.revokeGoogleCalendar = asyncHandler(async (req, res) => {
-  const firebaseUid = req.user ? req.user.uid : null; // Get Firebase UID from auth middleware
-
+exports.revokeGoogleAccess = asyncHandler(async (req, res) => {
+  const firebaseUid = req.user ? req.user.uid : null;
   if (!firebaseUid) {
     return res.status(401).json({ success: false, message: 'Authentication required.' });
   }
@@ -119,25 +96,19 @@ exports.revokeGoogleCalendar = asyncHandler(async (req, res) => {
   try {
     const user = await User.findOne({ firebaseUid: firebaseUid });
 
-    if (!user || !user.googleTokens || !user.googleTokens.accessToken) {
-      console.log(`No Google tokens found for user ${firebaseUid} to revoke.`);
-      return res.json({ success: true, message: 'Google Calendar was not connected or already disconnected.' });
+    if (!user || !user.googleTokens || !user.googleTokens.access_token) {
+      return res.status(400).json({ success: false, message: 'No Google tokens found for user.' });
     }
 
-    // Revoke token with Google
-    oauth2Client.setCredentials({ access_token: user.googleTokens.accessToken });
-    try {
-      await oauth2Client.revokeToken(user.googleTokens.accessToken);
-      console.log(`Google access token revoked with Google for user: ${firebaseUid}`);
-    } catch (revokeError) {
-      // Log revoke error but proceed to clear from DB, as Google might already have revoked
-      console.warn(`Failed to revoke token with Google for user ${firebaseUid}:`, revokeError.message);
-    }
+    // Set credentials for revocation
+    oauth2Client.setCredentials(user.googleTokens);
 
-    // Clear tokens from database (by unsetting the googleTokens field)
-    user.googleTokens = undefined; // Mongoose will treat this as $unset
+    // Revoke the token
+    await oauth2Client.revokeToken(user.googleTokens.access_token);
+
+    // Clear Google tokens from user document
+    user.googleTokens = null;
     await user.save();
-    console.log(`Google Calendar tokens cleared from DB for user: ${firebaseUid}`);
 
     res.json({
       success: true,
@@ -152,12 +123,8 @@ exports.revokeGoogleCalendar = asyncHandler(async (req, res) => {
   }
 });
 
-/**
- * @route GET /api/auth/google/status
- * @desc Check Google Calendar connection status for the authenticated user
- */
 exports.getConnectionStatus = asyncHandler(async (req, res) => {
-  const firebaseUid = req.user ? req.user.uid : null; // Get firebaseUid from auth token
+  const firebaseUid = req.user ? req.user.uid : null;
 
   if (!firebaseUid) {
     return res.status(401).json({ connected: false, message: 'Authentication required.' });
@@ -170,9 +137,33 @@ exports.getConnectionStatus = asyncHandler(async (req, res) => {
       return res.json({ connected: false, message: 'User not found.' });
     }
 
-    // Check if user has Google tokens (specifically, a refresh token)
-    const isConnected = !!(user.googleTokens && user.googleTokens.accessToken);
-    const email = isConnected && user.email ? user.email : ''; // Use user's email from DB
+    // Check if user has Google tokens and if they are still valid (or refreshable)
+    // Attempt to refresh if needed (this also validates the refresh token)
+    let tokens = user.googleTokens;
+    let isConnected = false;
+    let email = user.email || '';
+
+    if (tokens && tokens.refresh_token) {
+      try {
+        const refreshedTokens = await refreshGoogleToken(user); // This will update user.googleTokens in DB
+        if (refreshedTokens && refreshedTokens.access_token) {
+          isConnected = true;
+          email = user.email; // Ensure email is from the user document
+        }
+      } catch (refreshError) {
+        console.warn('Google token refresh failed:', refreshError.message);
+        // If refresh fails, consider it disconnected
+        isConnected = false;
+        user.googleTokens = null; // Clear invalid tokens
+        await user.save();
+      }
+    } else if (tokens && tokens.access_token) {
+      // If only access token exists (no refresh token), consider connected but might expire soon
+      // This case is less ideal as we can't refresh
+      isConnected = true;
+      email = user.email;
+    }
+
 
     res.json({
       connected: isConnected,
@@ -184,8 +175,3 @@ exports.getConnectionStatus = asyncHandler(async (req, res) => {
     res.status(500).json({ connected: false, message: 'Server error checking status.' });
   }
 });
-
-// Add your other existing authentication routes here (e.g., login, register, etc.)
-// exports.registerUser = asyncHandler(async (req, res) => { /* ... */ });
-// exports.loginUser = asyncHandler(async (req, res) => { /* ... */ });
-// exports.getCurrentUser = asyncHandler(async (req, res) => { /* ... */ });
