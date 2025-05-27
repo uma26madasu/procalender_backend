@@ -2,32 +2,34 @@
 const express = require('express');
 const router = express.Router();
 const googleCalendarController = require('../controllers/googleCalendarController');
-const { authenticateToken } = require('../middleware/auth'); // Assuming your auth middleware is named authenticateToken
+const { protect } = require('../middleware/auth'); // Assuming you have auth middleware
 
-// Public webhook endpoint (does not require authentication middleware)
+console.log('--- Inside src/routes/googleCalendarRoutes.js ---');
+console.log('googleCalendarController object after require:', typeof googleCalendarController, googleCalendarController);
+console.log('protect variable after require:', typeof protect, protect);
+
+
+// Public webhook endpoint (no authentication)
 router.post('/webhook', googleCalendarController.handleWebhook);
 
-// All other routes require authentication via `authenticateToken` middleware
-// Make sure `authenticateToken` correctly populates `req.user.uid` for controller access
-router.use(authenticateToken);
+// All other routes require authentication
+router.use(protect);
 
-// Calendar listing (if you have this in your controller)
-// router.get('/calendars', googleCalendarController.listCalendars);
+// Calendar listing and events
+router.get('/calendars', googleCalendarController.listCalendars);
+router.get('/events', googleCalendarController.getEvents);
 
-// Get calendar events for the authenticated user
-router.get('/events', googleCalendarController.getCalendarEvents);
-
-// Conflict checking (if you have this in your controller)
-// router.post('/check-conflicts', googleCalendarController.checkConflicts);
+// Conflict checking
+router.post('/check-conflicts', googleCalendarController.checkConflicts);
 
 // Event management
-router.post('/create-event', googleCalendarController.createEvent);
-router.patch('/events/:eventId/confirm', googleCalendarController.confirmEvent); // Changed from updateEvent to confirmEvent
+router.post('/events', googleCalendarController.createEvent);
+router.put('/events/:eventId', googleCalendarController.updateEvent);
 router.delete('/events/:eventId', googleCalendarController.deleteEvent);
 
-// Webhook management (if you have these in your controller)
-// router.post('/register-webhook', googleCalendarController.registerWebhook);
-// router.post('/unregister-webhook', googleCalendarController.unregisterWebhook);
-
+// Webhook management
+router.post('/register-webhook', googleCalendarController.registerWebhook);
+router.post('/unregister-webhook', googleCalendarController.unregisterWebhook);
 
 module.exports = router;
+console.log('--- Exiting src/routes/googleCalendarRoutes.js ---');
