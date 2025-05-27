@@ -1,410 +1,202 @@
+// src/controllers/googleCalendarController.js
 const { google } = require('googleapis');
-const { User, Booking } = require('../models');
+const { User, Booking } = require('../models'); // Assuming you have Booking model as well
 const asyncHandler = require('../middleware/asyncHandler');
 const crypto = require('crypto');
-const { verifyWebhook } = require('../utils/webhookVerifier');
-const calendarService = require('../services/calendarService');
+const { verifyWebhook } = require('../utils/webhookVerifier'); // Keep if you use webhooks
+const calendarService = require('../services/calendarService'); // Your existing service
+const { refreshGoogleToken } = require('../utils/tokenManager'); // <--- Import your token manager
+const axios = require('axios'); // <--- Import axios for direct API calls
 
-// Configure Google OAuth client
+// Configure Google OAuth client (ensure consistency across files)
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// Generate a unique channel ID
+// Generate a unique channel ID for webhooks (if you implement them)
 const generateChannelId = () => crypto.randomBytes(16).toString('hex');
 
 /**
- * Helper function to get authenticated calendar client
+ * Helper function to create an authenticated axios instance
+ * This mirrors the createAxiosWithAuth in your calendarService.js
  */
-const getCalendarClient = async (userId) => {
-  const user = await User.findById(userId);
-  if (!user?.googleTokens) {
-    throw new Error('Google Calendar not connected');
-  }
-  oauth2Client.setCredentials(user.googleTokens);
-  return google.calendar({ version: 'v3', auth: oauth2Client });
+const createAxiosWithAuth = (accessToken) => {
+  return axios.create({
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
 };
 
 /**
- * @route POST /api/google-calendar/register-webhook
- * @desc Register webhook for Google Calendar notifications
+ * @route GET /api/google-calendar/events
+ * @desc Get calendar events for the authenticated user
  */
-exports.registerWebhook = asyncHandler(async (req, res) => {
-  const { calendarId = 'primary' } = req.body;
-  const calendar = await getCalendarClient(req.user.id);
-  
-  // Generate unique channel ID and webhook URL
-  const channelId = generateChannelId();
-  const webhookUrl = `${process.env.APP_URL}/api/google-calendar/webhook`;
-  
-  // Register the webhook with Google Calendar
-  const response = await calendar.events.watch({
-    calendarId,
-    requestBody: {
-      id: channelId,
-      type: 'web_hook',
-      address: webhookUrl,
-      token: process.env.WEBHOOK_SECRET,
-      params: {
-        ttl: '604800' // 7 days in seconds
-      }
-    }
-  });
+exports.getCalendarEvents = asyncHandler(async (req, res) => {
+  const firebaseUid = req.user ? req.user.uid : null; // Get Firebase UID from auth middleware
+  const { startDate, endDate, maxResults = 100 } = req.query; // Query parameters for date range and limit
 
-  // Save webhook details to user
-  await User.findByIdAndUpdate(req.user.id, {
-    $push: {
-      calendarWebhooks: {
-        channelId,
-        resourceId: response.data.resourceId,
-        calendarId,
-        expiration: new Date(parseInt(response.data.expiration, 10))
-      }
-    }
-  });
-
-  res.status(200).json({ 
-    success: true, 
-    message: 'Webhook registered successfully',
-    data: {
-      channelId,
-      resourceId: response.data.resourceId,
-      expiration: response.data.expiration
-    }
-  });
-});
-
-/**
- * @route POST /api/google-calendar/unregister-webhook
- * @desc Unregister webhook for Google Calendar notifications
- */
-exports.unregisterWebhook = asyncHandler(async (req, res) => {
-  const { channelId, resourceId } = req.body;
-  const calendar = await getCalendarClient(req.user.id);
-  
-  try {
-    // Stop the notification channel
-    await calendar.channels.stop({
-      requestBody: {
-        id: channelId,
-        resourceId
-      }
-    });
-  } catch (error) {
-    console.error('Error stopping channel:', error);
-    // Channel may have already expired, continue with cleanup
+  if (!firebaseUid) {
+    return res.status(401).json({ message: 'Authentication required to fetch events.' });
   }
 
-  // Remove webhook from user's record
-  await User.findByIdAndUpdate(req.user.id, {
-    $pull: {
-      calendarWebhooks: { channelId }
+  try {
+    const user = await User.findOne({ firebaseUid: firebaseUid });
+    if (!user || !user.googleTokens) {
+      throw new Error('Google Calendar not connected for this user.');
     }
-  });
 
-  res.status(200).json({ 
-    success: true, 
-    message: 'Webhook unregistered successfully'
-  });
-});
+    // Refresh token if necessary (uses your tokenManager). This also saves updated tokens to DB.
+    const refreshedTokens = await refreshGoogleToken(user);
+    const axiosWithAuth = createAxiosWithAuth(refreshedTokens.accessToken);
 
-/**
- * @route GET /api/google-calendar/calendars
- * @desc Get list of user's Google Calendars
- */
-exports.listCalendars = asyncHandler(async (req, res) => {
-  const calendar = await getCalendarClient(req.user.id);
-  const response = await calendar.calendarList.list();
-  res.status(200).json({ success: true, data: response.data.items });
-});
+    // Set default date range for fetching events if not provided
+    const timeMin = startDate ? new Date(startDate).toISOString() : new Date().toISOString();
+    const timeMax = endDate ? new Date(endDate).toISOString() : new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString(); // Default to 1 year ahead
 
-/**
- * @route GET /api/google-calendar/events
- * @desc Get calendar events with pagination
- */
-exports.getEvents = asyncHandler(async (req, res) => {
-  const { calendarId = 'primary', startDate, endDate, limit = 10, pageToken } = req.query;
-  const calendar = await getCalendarClient(req.user.id);
-
-  const params = {
-    calendarId,
-    timeMin: startDate || new Date().toISOString(),
-    timeMax: endDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    singleEvents: true,
-    orderBy: 'startTime',
-    maxResults: Math.min(parseInt(limit, 10), 250) // Cap at 250 events
-  };
-
-  if (pageToken) params.pageToken = pageToken;
-
-  const response = await calendar.events.list(params);
-  res.status(200).json({
-    success: true,
-    data: response.data.items,
-    pagination: {
-      nextPageToken: response.data.nextPageToken,
-      hasMore: !!response.data.nextPageToken
-    }
-  });
-});
-
-/**
- * @route POST /api/google-calendar/check-conflicts
- * @desc Check for scheduling conflicts
- */
-exports.checkConflicts = asyncHandler(async (req, res) => {
-  const { startTime, endTime, calendarIds = ['primary'] } = req.body;
-  const calendar = await getCalendarClient(req.user.id);
-
-  const response = await calendar.freebusy.query({
-    requestBody: {
-      timeMin: startTime,
-      timeMax: endTime,
-      items: calendarIds.map(id => ({ id }))
-    }
-  });
-
-  const conflicts = Object.entries(response.data.calendars)
-    .flatMap(([calId, { busy }]) => 
-      (busy || []).map(period => ({
-        calendarId: calId,
-        start: period.start,
-        end: period.end
-      }))
+    // Make direct API call to Google Calendar using axios
+    const response = await axiosWithAuth.get(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events`, // Using 'primary' calendarId
+      {
+        params: {
+          timeMin: timeMin,
+          timeMax: timeMax,
+          maxResults: parseInt(maxResults),
+          singleEvents: true, // Expand recurring events into individual instances
+          orderBy: 'startTime', // Order by start time
+        }
+      }
     );
 
-  res.status(200).json({
-    success: true,
-    hasConflicts: conflicts.length > 0,
-    conflicts,
-    freeSlots: calculateFreeSlots(startTime, endTime, conflicts)
-  });
+    const events = response.data.items || [];
+    res.json({ success: true, events });
+  } catch (error) {
+    console.error('Error fetching calendar events:', error.message, error.stack);
+    // If unauthorized/expired, prompt user to reconnect
+    if (error.message.includes('re-authenticate') || error.message.includes('not connected') || error.response?.status === 401 || error.response?.status === 403) {
+      return res.status(401).json({
+        success: false,
+        message: 'Google Calendar connection expired or invalid. Please reconnect.',
+        reconnect: true // Custom flag for frontend to handle reconnection
+      });
+    }
+    res.status(500).json({ success: false, message: 'Failed to fetch calendar events.' });
+  }
 });
 
 /**
- * @route POST /api/google-calendar/events
- * @desc Create a calendar event
+ * @route POST /api/google-calendar/create-event
+ * @desc Create a calendar event (uses calendarService.createEvent)
  */
 exports.createEvent = asyncHandler(async (req, res) => {
-  const { calendarId = 'primary', event, bookingId } = req.body;
-  const calendar = await getCalendarClient(req.user.id);
+  const firebaseUid = req.user ? req.user.uid : null;
+  const eventData = req.body;
+  // calendarId and isTentative can be passed in req.body or defaulted here
+  const { isTentative = false, calendarId = 'primary' } = req.body;
 
-  // Validate event times
-  if (!event.start || !event.end) {
-    throw new Error('Start and end times are required');
+  if (!firebaseUid) {
+    return res.status(401).json({ message: 'Authentication required to create event.' });
   }
 
-  const response = await calendar.events.insert({
-    calendarId,
-    requestBody: event,
-    sendUpdates: 'all'
-  });
+  try {
+    const user = await User.findOne({ firebaseUid: firebaseUid });
+    if (!user) {
+      throw new Error('User not found.');
+    }
 
-  if (bookingId) {
-    await Booking.findByIdAndUpdate(bookingId, {
-      googleEventId: response.data.id,
-      status: 'confirmed',
-      $unset: { hasCalendarConflict: "", conflictDetails: "" }
-    });
+    // Call your existing calendarService function, passing user's MongoDB _id
+    const createdEvent = await calendarService.createEvent(user._id, calendarId, eventData, isTentative);
+    res.status(201).json({ success: true, event: createdEvent });
+  } catch (error) {
+    console.error('Error in createEvent controller:', error.message, error.stack);
+    if (error.message.includes('re-authenticate') || error.message.includes('not connected') || error.response?.status === 401) {
+      return res.status(401).json({
+        success: false,
+        message: 'Google Calendar connection expired or invalid. Please reconnect.',
+        reconnect: true
+      });
+    }
+    res.status(500).json({ success: false, message: 'Failed to create event.' });
   }
-
-  res.status(201).json({ success: true, data: response.data });
 });
 
 /**
- * @route PUT /api/google-calendar/events/:eventId
- * @desc Update a calendar event
+ * @route PATCH /api/google-calendar/events/:eventId/confirm
+ * @desc Update a tentative event to confirmed (uses calendarService.confirmEvent)
  */
-exports.updateEvent = asyncHandler(async (req, res) => {
+exports.confirmEvent = asyncHandler(async (req, res) => {
+  const firebaseUid = req.user ? req.user.uid : null;
   const { eventId } = req.params;
-  const { calendarId = 'primary', event } = req.body;
-  const calendar = await getCalendarClient(req.user.id);
+  const { calendarId = 'primary' } = req.body; // Calendar ID for the event
 
-  const response = await calendar.events.update({
-    calendarId,
-    eventId,
-    requestBody: event,
-    sendUpdates: 'all'
-  });
+  if (!firebaseUid) {
+    return res.status(401).json({ message: 'Authentication required to confirm event.' });
+  }
 
-  res.status(200).json({ success: true, data: response.data });
+  try {
+    const user = await User.findOne({ firebaseUid: firebaseUid });
+    if (!user) {
+      throw new Error('User not found.');
+    }
+
+    // Call your existing calendarService function, passing user's MongoDB _id
+    const confirmedEvent = await calendarService.confirmEvent(user._id, calendarId, eventId);
+    res.json({ success: true, event: confirmedEvent });
+  } catch (error) {
+    console.error('Error in confirmEvent controller:', error.message, error.stack);
+    if (error.message.includes('re-authenticate') || error.message.includes('not connected') || error.response?.status === 401) {
+      return res.status(401).json({
+        success: false,
+        message: 'Google Calendar connection expired or invalid. Please reconnect.',
+        reconnect: true
+      });
+    }
+    res.status(500).json({ success: false, message: 'Failed to confirm event.' });
+  }
 });
 
 /**
  * @route DELETE /api/google-calendar/events/:eventId
- * @desc Delete a calendar event
+ * @desc Delete an event (uses calendarService.deleteEvent)
  */
 exports.deleteEvent = asyncHandler(async (req, res) => {
+  const firebaseUid = req.user ? req.user.uid : null;
   const { eventId } = req.params;
-  const { calendarId = 'primary', bookingId } = req.query;
-  const calendar = await getCalendarClient(req.user.id);
+  const { calendarId = 'primary' } = req.body; // Calendar ID for the event
 
-  await calendar.events.delete({ 
-    calendarId, 
-    eventId,
-    sendUpdates: 'all'
-  });
-
-  if (bookingId) {
-    await Booking.findByIdAndUpdate(bookingId, {
-      $unset: { googleEventId: "", hasCalendarConflict: "", conflictDetails: "" }
-    });
+  if (!firebaseUid) {
+    return res.status(401).json({ message: 'Authentication required to delete event.' });
   }
 
-  res.status(200).json({ success: true, message: 'Event deleted successfully' });
+  try {
+    const user = await User.findOne({ firebaseUid: firebaseUid });
+    if (!user) {
+      throw new Error('User not found.');
+    }
+
+    // Call your existing calendarService function, passing user's MongoDB _id
+    const success = await calendarService.deleteEvent(user._id, calendarId, eventId);
+    res.json({ success: true, message: 'Event deleted successfully.' });
+  } catch (error) {
+    console.error('Error in deleteEvent controller:', error.message, error.stack);
+    if (error.message.includes('re-authenticate') || error.message.includes('not connected') || error.response?.status === 401) {
+      return res.status(401).json({
+        success: false,
+        message: 'Google Calendar connection expired or invalid. Please reconnect.',
+        reconnect: true
+      });
+    }
+    res.status(500).json({ success: false, message: 'Failed to delete event.' });
+  }
 });
 
-/**
- * @route POST /api/google-calendar/webhook
- * @desc Handle Google Calendar push notifications
- */
-exports.handleWebhook = async (req, res) => {
-  // Immediate response required by Google
-  res.status(200).end();
-  
-  // Validate webhook request
-  if (!verifyWebhook(req.headers, req.body)) {
-    console.error('Invalid webhook request');
-    return;
-  }
-  
-  const channelId = req.headers['x-goog-channel-id'];
-  const resourceState = req.headers['x-goog-resource-state'];
-  const resourceId = req.headers['x-goog-resource-id'];
-  
-  // Process different notification types
-  try {
-    // Find the user associated with this webhook
-    const user = await User.findOne({ 'calendarWebhooks.channelId': channelId });
-    if (!user) {
-      console.error(`No user found for webhook channel ${channelId}`);
-      return;
-    }
-    
-    const webhook = user.calendarWebhooks.find(wh => wh.channelId === channelId);
-    if (!webhook) return;
-    
-    switch (resourceState) {
-      case 'sync':
-        // Initial sync message
-        console.log(`Webhook sync initiated for channel ${channelId}`);
-        break;
-        
-      case 'exists':
-        // Calendar updated - process changes
-        await processCalendarUpdate(user._id, webhook.calendarId);
-        break;
-        
-      case 'not_exists':
-        // Resource deleted or expired
-        console.log(`Resource no longer exists for channel ${channelId}`);
-        // Clean up expired webhook
-        await User.findByIdAndUpdate(user._id, {
-          $pull: { calendarWebhooks: { channelId } }
-        });
-        break;
-        
-      default:
-        console.log(`Unknown resource state: ${resourceState}`);
-    }
-  } catch (error) {
-    console.error('Error processing webhook:', error);
-  }
-};
-
-// Updated helper function to process calendar updates
-async function processCalendarUpdate(userId, calendarId) {
-  try {
-    const calendar = await getCalendarClient(userId);
-    const response = await calendar.events.list({
-      calendarId,
-      updatedMin: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-      singleEvents: true,
-      timeMin: new Date().toISOString() // Only check future events
-    });
-
-    await checkBookingConflicts(userId, response.data.items);
-  } catch (error) {
-    console.error('Error processing calendar update:', error);
-    // Consider adding retry logic for transient errors
-  }
-}
-
-// Updated helper function to check for booking conflicts
-async function checkBookingConflicts(userId, events) {
-  const bookings = await Booking.find({
-    ownerId: userId,
-    startTime: { $gt: new Date() },
-    status: { $in: ['confirmed', 'pending'] }
-  });
-
-  for (const booking of bookings) {
-    const conflicts = events.filter(event => {
-      if (!event.start || !event.end || !booking.startTime || !booking.endTime) return false;
-      
-      const eventStart = new Date(event.start.dateTime || `${event.start.date}T00:00:00`);
-      const eventEnd = new Date(event.end.dateTime || `${event.end.date}T23:59:59`);
-      const bookingStart = new Date(booking.startTime);
-      const bookingEnd = new Date(booking.endTime);
-
-      return (
-        (eventStart < bookingEnd && eventEnd > bookingStart) ||
-        (event.start.date && bookingStart.toDateString() === eventStart.toDateString())
-      );
-    });
-
-    if (conflicts.length > 0) {
-      await Booking.findByIdAndUpdate(booking._id, {
-        hasCalendarConflict: true,
-        conflictDetails: conflicts.map(event => ({
-          eventId: event.id,
-          summary: event.summary,
-          start: event.start.dateTime || event.start.date,
-          end: event.end.dateTime || event.end.date
-        }))
-      });
-    } else if (booking.hasCalendarConflict) {
-      await Booking.findByIdAndUpdate(booking._id, {
-        $unset: { hasCalendarConflict: "", conflictDetails: "" }
-      });
-    }
-  }
-}
-
-// Helper function to calculate free slots between conflicts
-function calculateFreeSlots(startTime, endTime, conflicts) {
-  const slots = [];
-  let currentStart = new Date(startTime);
-  const end = new Date(endTime);
-
-  // Sort conflicts by start time
-  const sortedConflicts = [...conflicts].sort((a, b) => 
-    new Date(a.start) - new Date(b.start)
-  );
-
-  for (const conflict of sortedConflicts) {
-    const conflictStart = new Date(conflict.start);
-    const conflictEnd = new Date(conflict.end);
-
-    if (conflictStart > currentStart) {
-      slots.push({
-        start: currentStart.toISOString(),
-        end: conflictStart.toISOString()
-      });
-    }
-
-    currentStart = new Date(Math.max(currentStart, conflictEnd));
-  }
-
-  // Add remaining time after last conflict
-  if (currentStart < end) {
-    slots.push({
-      start: currentStart.toISOString(),
-      end: end.toISOString()
-    });
-  }
-
-  return slots;
-}
+// You can keep your existing webhook-related functions here if you use them:
+// exports.registerWebhook = asyncHandler(async (req, res) => { /* ... */ });
+// exports.handleWebhook = asyncHandler(async (req, res) => { /* ... */ });
+// exports.checkConflicts = asyncHandler(async (req, res) => { /* ... */ });
+// exports.getCalendarClient = async (userId) => { /* ... */ } // If you still use googleapis for other operations
+// function updateBookingConflictStatus(bookingId, conflicts) { /* ... */ }
+// function calculateFreeSlots(startTime, endTime, conflicts) { /* ... */ }

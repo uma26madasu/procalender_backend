@@ -1,5 +1,16 @@
+// src/models/User.js
 const mongoose = require('mongoose');
 const validator = require('validator');
+
+// Define the schema for Google tokens
+const googleTokensSchema = new mongoose.Schema({
+  accessToken: { type: String, required: true },
+  refreshToken: { type: String, required: true },
+  expiryDate: { type: Date, required: true }, // The time when the access token expires
+  scope: { type: String },
+  tokenType: { type: String },
+  idToken: { type: String }, // Google OAuth can sometimes provide an id_token
+}, { _id: false }); // Do not create a separate _id for this sub-document
 
 // User schema with comprehensive validation
 const userSchema = new mongoose.Schema({
@@ -21,6 +32,16 @@ const userSchema = new mongoose.Schema({
     minlength: [2, 'Name must be at least 2 characters'],
     maxlength: [50, 'Name cannot exceed 50 characters'],
     match: [/^[a-zA-Z\s'-]+$/, 'Name can only contain letters, spaces, hyphens, and apostrophes']
+  },
+  firebaseUid: { // Unique ID from Firebase Authentication
+    type: String,
+    required: true,
+    unique: true,
+    index: true // Add an index for faster lookups
+  },
+  googleTokens: { // Embedded document for Google Calendar OAuth tokens
+    type: googleTokensSchema,
+    required: false, // Not all users will connect Google Calendar
   },
   createdAt: {
     type: Date,
@@ -45,40 +66,29 @@ const userSchema = new mongoose.Schema({
         required: [true, 'Resource ID is required for webhook'],
         trim: true
       },
-      calendarId: {
-        type: String,
-        required: [true, 'Calendar ID is required for webhook'],
-        trim: true,
-        validate: {
-          validator: function(value) {
-            // Basic validation for common calendar ID formats
-            return /^[a-zA-Z0-9._-]+(@[a-zA-Z0-9-]+)?$/.test(value);
-          },
-          message: 'Invalid calendar ID format'
-        }
-      },
       expiration: {
         type: Date,
         required: [true, 'Expiration date is required for webhook'],
-        validate: {
-          validator: function(value) {
-            return value > new Date();
-          },
-          message: 'Expiration date must be in the future'
-        }
       },
-      created: {
-        type: Date,
-        default: Date.now
-      }
+      calendarId: {
+        type: String,
+        required: [true, 'Calendar ID is required for webhook'],
+        trim: true
+      },
     }],
+    default: [],
     validate: {
-      validator: function(webhooks) {
-        // Limit the number of webhooks per user
-        return webhooks.length <= 10;
+      validator: function(v) {
+        return Array.isArray(v);
       },
-      message: 'Maximum of 10 webhooks allowed per user'
+      message: props => `${props.value} is not a valid array for calendarWebhooks!`
     }
+  },
+  role: {
+    type: String,
+    enum: ['user', 'admin'],
+    default: 'user',
+    message: '{VALUE} is not a valid role. Must be "user" or "admin"'
   }
 }, {
   timestamps: true,
@@ -96,14 +106,21 @@ const userSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ firebaseUid: 1 }, { unique: true }); // New index for firebaseUid
 userSchema.index({ 'calendarWebhooks.calendarId': 1 });
 userSchema.index({ 'calendarWebhooks.expiration': 1 });
 userSchema.index({ createdAt: -1 });
 
-// Middleware to handle duplicate key errors (especially for email)
+// Middleware to handle duplicate key errors (especially for email and firebaseUid)
 userSchema.post('save', function(error, doc, next) {
   if (error.name === 'MongoServerError' && error.code === 11000) {
-    next(new Error('Email address is already registered'));
+    if (error.message.includes('email')) {
+      next(new Error('Email address is already registered'));
+    } else if (error.message.includes('firebaseUid')) {
+      next(new Error('User with this Firebase ID is already registered'));
+    } else {
+      next(error);
+    }
   } else {
     next(error);
   }
@@ -122,11 +139,4 @@ userSchema.methods.hasWebhookForCalendar = function(calendarId) {
 };
 
 // Export the model with error handling
-try {
-  module.exports = mongoose.model('User', userSchema);
-  console.log('User model exported successfully');
-} catch (error) {
-  console.error('Error creating User model:', error.message);
-  // Export a dummy object to prevent application crashes
-  module.exports = { dummy: true };
-}
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);
