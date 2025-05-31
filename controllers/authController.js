@@ -1,6 +1,6 @@
 // controllers/authController.js - FIXED VERSION WITH IMPROVED CALLBACK HANDLING
 const { google } = require('googleapis');
-const admin = require('../firebase/admin');
+//const admin = require('../firebase/admin');
 const asyncHandler = require('express-async-handler');
 const TokenManager = require('../utils/tokenManager');
 
