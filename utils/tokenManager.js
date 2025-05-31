@@ -1,5 +1,6 @@
 // src/utils/tokenManager.js
 const { google } = require('googleapis');
+const jwt = require('jsonwebtoken');
 const User = require('../models/User'); // Ensure this path is correct based on your project structure
 
 // Configure Google OAuth client
@@ -64,9 +65,12 @@ exports.refreshGoogleToken = async (user) => {
   return user.googleTokens.toObject(); // Token is valid, return existing tokens as plain object
 };
 
-// If you have a JWT generation function in this file, keep it here.
-// Example:
-// const jwt = require('jsonwebtoken'); // Assuming you use jsonwebtoken
-// exports.generateToken = (payload, expiresIn = '1d') => {
-//   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
-// };
+/**
+ * Generate JWT token for authentication
+ * @param {Object} payload - Payload to include in token
+ * @param {String} expiresIn - Token expiration time
+ * @returns {String} JWT token
+ */
+exports.generateToken = (payload, expiresIn = '7d') => {
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
+};

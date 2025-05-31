@@ -48,7 +48,7 @@ const newBookingTemplate = (booking, advisor, link) => {
             </div>
           ` : ''}
           
-          <p>View all your meetings in the <a href="https://procalender-frontend.vercel.app/meetings">ProCalender dashboard</a>.</p>
+          <p>View all your meetings in the <a href="${process.env.FRONTEND_URL}/meetings">ProCalender dashboard</a>.</p>
         </div>
       </body>
     </html>

@@ -55,7 +55,7 @@ exports.handleGoogleCallback = asyncHandler(async (req, res) => { // Wrapped wit
 
   if (!code) {
     console.error('No authorization code provided');
-    return res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=no_code`);
+    return res.redirect(`${process.env.FRONTEND_URL}/dashboard?error=no_code`);
   }
 
   try {
@@ -76,7 +76,7 @@ exports.handleGoogleCallback = asyncHandler(async (req, res) => { // Wrapped wit
 
     if (!profile.email) {
       console.error('Google profile did not return an email.');
-      return res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=no_email`);
+      return res.redirect(`${process.env.FRONTEND_URL}/dashboard?error=no_email`);
     }
 
     // Find or create user in your database
@@ -110,14 +110,14 @@ exports.handleGoogleCallback = asyncHandler(async (req, res) => { // Wrapped wit
     const appJwt = require('../utils/tokenManager').generateToken({ id: user._id, firebaseUid: user.firebaseUid }); // Assuming generateToken exists
 
     // Redirect to frontend dashboard with token or success message
-    const redirectUrl = `https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?token=${appJwt}&message=Google Calendar connected!&type=success`;
+    const redirectUrl = `${process.env.FRONTEND_URL}/dashboard?token=${appJwt}&message=Google Calendar connected!&type=success`;
     console.log('Redirecting to frontend:', redirectUrl.substring(0, 100) + '...');
     res.redirect(redirectUrl);
 
   } catch (error) {
     console.error('Error handling Google callback:', error.message, error.stack);
     // Redirect to frontend with error message
-    res.redirect(`https://procalender-frontend-uma26madasus-projects.vercel.app/dashboard?error=google_oauth_failed&message=${encodeURIComponent(error.message)}&type=error`);
+    res.redirect(`${process.env.FRONTEND_URL}/dashboard?error=google_oauth_failed&message=${encodeURIComponent(error.message)}&type=error`);
   }
 });
 console.log('exports.handleGoogleCallback is:', typeof exports.handleGoogleCallback); // Should be 'function'
