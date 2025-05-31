@@ -35,8 +35,9 @@ const userSchema = new mongoose.Schema({
   },
   firebaseUid: { // Unique ID from Firebase Authentication
     type: String,
-    required: true,
+    required: false, // Make optional for OAuth-only users
     unique: true,
+    sparse: true, // Allow multiple null values
     index: true // Add an index for faster lookups
   },
   googleTokens: { // Embedded document for Google Calendar OAuth tokens
@@ -106,7 +107,7 @@ const userSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 userSchema.index({ email: 1 }, { unique: true });
-userSchema.index({ firebaseUid: 1 }, { unique: true }); // New index for firebaseUid
+userSchema.index({ firebaseUid: 1 }, { unique: true, sparse: true }); // Sparse index for optional field
 userSchema.index({ 'calendarWebhooks.calendarId': 1 });
 userSchema.index({ 'calendarWebhooks.expiration': 1 });
 userSchema.index({ createdAt: -1 });
