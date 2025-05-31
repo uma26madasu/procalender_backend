@@ -42,11 +42,13 @@ dirLog(middlewarePath, 'Middleware');
 app.use(cors({
   origin: [
     'https://procalender-frontend.vercel.app',
-    'https://procalender-frontend-uma26madasus-projects.vercel.app', 
-    'http://localhost:3000'
+    'https://procalender-frontend-uma26madasus-projects.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:5173'  // Add Vite dev server
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Parse JSON request bodies
