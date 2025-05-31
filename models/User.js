@@ -2,21 +2,21 @@
 const mongoose = require('mongoose');
 const validator = require('validator');
 
-// Define the schema for Google tokens
+// Simple Google tokens schema - no required fields
 const googleTokensSchema = new mongoose.Schema({
-  accessToken: { type: String, required: true },
-  refreshToken: { type: String, required: true },
-  expiryDate: { type: Date, required: true }, // The time when the access token expires
-  scope: { type: String },
-  tokenType: { type: String },
-  idToken: { type: String }, // Google OAuth can sometimes provide an id_token
-}, { _id: false }); // Do not create a separate _id for this sub-document
+  accessToken: String,
+  refreshToken: String,
+  expiryDate: Date,
+  scope: String,
+  tokenType: String,
+  idToken: String
+}, { _id: false });
 
-// User schema with comprehensive validation
+// Simple user schema - minimal required fields
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
-    required: [true, 'Email is required'],
+    required: true,
     unique: true,
     lowercase: true,
     trim: true,
@@ -27,69 +27,20 @@ const userSchema = new mongoose.Schema({
   },
   name: {
     type: String,
-    required: [true, 'Name is required'],
-    trim: true,
-    minlength: [2, 'Name must be at least 2 characters'],
-    maxlength: [50, 'Name cannot exceed 50 characters'],
-    match: [/^[a-zA-Z\s'-]+$/, 'Name can only contain letters, spaces, hyphens, and apostrophes']
+    required: true,
+    trim: true
   },
-  firebaseUid: { // Unique ID from Firebase Authentication
+  firebaseUid: {
     type: String,
-    required: false, // Make optional for OAuth-only users
+    required: false, // NOT REQUIRED
     unique: true,
-    sparse: true, // Allow multiple null values
-    index: true // Add an index for faster lookups
+    sparse: true // Allow multiple null values
   },
-  googleTokens: { // Embedded document for Google Calendar OAuth tokens
-    type: googleTokensSchema,
-    required: false, // Not all users will connect Google Calendar
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-    immutable: true,
-    validate: {
-      validator: function(value) {
-        return value <= new Date();
-      },
-      message: 'Creation date cannot be in the future'
-    }
-  },
-  calendarWebhooks: {
-    type: [{
-      channelId: {
-        type: String,
-        required: [true, 'Channel ID is required for webhook'],
-        trim: true
-      },
-      resourceId: {
-        type: String,
-        required: [true, 'Resource ID is required for webhook'],
-        trim: true
-      },
-      expiration: {
-        type: Date,
-        required: [true, 'Expiration date is required for webhook'],
-      },
-      calendarId: {
-        type: String,
-        required: [true, 'Calendar ID is required for webhook'],
-        trim: true
-      },
-    }],
-    default: [],
-    validate: {
-      validator: function(v) {
-        return Array.isArray(v);
-      },
-      message: props => `${props.value} is not a valid array for calendarWebhooks!`
-    }
-  },
+  googleTokens: googleTokensSchema, // NOT REQUIRED
   role: {
     type: String,
     enum: ['user', 'admin'],
-    default: 'user',
-    message: '{VALUE} is not a valid role. Must be "user" or "admin"'
+    default: 'user'
   }
 }, {
   timestamps: true,
@@ -99,20 +50,14 @@ const userSchema = new mongoose.Schema({
       delete ret.__v;
       return ret;
     }
-  },
-  toObject: {
-    virtuals: true
   }
 });
 
-// Indexes for better query performance
+// Indexes
 userSchema.index({ email: 1 }, { unique: true });
-userSchema.index({ firebaseUid: 1 }, { unique: true, sparse: true }); // Sparse index for optional field
-userSchema.index({ 'calendarWebhooks.calendarId': 1 });
-userSchema.index({ 'calendarWebhooks.expiration': 1 });
-userSchema.index({ createdAt: -1 });
+userSchema.index({ firebaseUid: 1 }, { unique: true, sparse: true });
 
-// Middleware to handle duplicate key errors (especially for email and firebaseUid)
+// Error handling
 userSchema.post('save', function(error, doc, next) {
   if (error.name === 'MongoServerError' && error.code === 11000) {
     if (error.message.includes('email')) {
@@ -127,17 +72,4 @@ userSchema.post('save', function(error, doc, next) {
   }
 });
 
-// Virtual for formatted creation date
-userSchema.virtual('createdAtFormatted').get(function() {
-  return this.createdAt.toISOString();
-});
-
-// Method to check if a webhook exists for a calendar
-userSchema.methods.hasWebhookForCalendar = function(calendarId) {
-  return this.calendarWebhooks.some(
-    webhook => webhook.calendarId === calendarId && webhook.expiration > new Date()
-  );
-};
-
-// Export the model with error handling
-module.exports = mongoose.models.User || mongoose.model('User', userSchema);
+module.exports = mongoose.model('User', userSchema);
