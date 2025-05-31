@@ -1,27 +1,18 @@
-// src/routes/auth.js
+// routes/auth.js - UPDATED VERSION FOR YOUR EXISTING STRUCTURE
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const { protect } = require('../middleware/auth');
 
-console.log('--- Inside src/routes/auth.js ---');
-console.log('authController object after require:', typeof authController, authController);
-console.log('authController.getGoogleAuthUrl is:', typeof authController.getGoogleAuthUrl);
-console.log('authController.handleGoogleCallback is:', typeof authController.handleGoogleCallback);
-console.log('authController.revokeGoogleAccess is:', typeof authController.revokeGoogleAccess);
-console.log('authController.getConnectionStatus is:', typeof authController.getConnectionStatus);
+// Google OAuth routes
+router.get('/google/url', protect, authController.getGoogleAuthUrl);
 
-
-// Generate OAuth URL for Google sign-in
-router.get('/google/url', authController.getGoogleAuthUrl);
-
-// Handle OAuth callback from Google
+// Handle callback from both Google (GET) and frontend (POST)
 router.get('/google/callback', authController.handleGoogleCallback);
+router.post('/google/callback', authController.handleGoogleCallback);
 
-// Revoke Google access
-router.post('/google/revoke', authController.revokeGoogleAccess);
-
-// Check Google connection status
-router.get('/google/status', authController.getConnectionStatus);
+// Status and disconnect routes
+router.get('/google/status', protect, authController.getGoogleAuthStatus);
+router.post('/google/disconnect', protect, authController.disconnectGoogleCalendar);
 
 module.exports = router;
-console.log('--- Exiting src/routes/auth.js ---');
