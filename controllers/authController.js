@@ -283,57 +283,121 @@ exports.handleGoogleCallback = async (req, res) => {
 };
 
 // Check Google Calendar connection status
+// Replace the getGoogleAuthStatus function in controllers/authController.js
+
 exports.getGoogleAuthStatus = async (req, res) => {
   try {
-    const userEmail = req.query.email || req.user?.email;
+    console.log('🔄 Checking Google auth status...');
+    console.log('🔍 Query params:', req.query);
+    console.log('🔍 Available memory tokens:', Object.keys(global.userTokens || {}));
     
+    const userEmail = req.query.email;
+    
+    // Check database first if email provided
     if (userEmail) {
-      const user = await User.findOne({ email: userEmail });
-      if (user?.googleTokens?.accessToken) {
-        const isExpired = user.googleTokens.expiryDate && 
-                         Date.now() >= user.googleTokens.expiryDate.getTime();
-        
-        return res.json({ 
-          connected: !isExpired, 
-          email: user.email,
-          name: user.name,
-          connectedAt: user.googleTokens.connectedAt || user.updatedAt,
-          isExpired: isExpired
-        });
+      try {
+        const user = await User.findOne({ email: userEmail });
+        if (user?.googleTokens?.accessToken) {
+          const isExpired = user.googleTokens.expiryDate && 
+                           Date.now() >= user.googleTokens.expiryDate.getTime();
+          
+          console.log(`📧 Found user in database: ${userEmail}, expired: ${isExpired}`);
+          
+          return res.json({ 
+            connected: !isExpired, 
+            email: user.email,
+            name: user.name,
+            source: 'database',
+            connectedAt: user.googleTokens.connectedAt || user.updatedAt,
+            isExpired: isExpired,
+            debug: {
+              hasTokens: !!user.googleTokens,
+              expiryDate: user.googleTokens.expiryDate
+            }
+          });
+        } else {
+          console.log(`📧 User found in database but no tokens: ${userEmail}`);
+        }
+      } catch (dbError) {
+        console.log('⚠️ Database lookup error:', dbError.message);
       }
     }
     
+    // Check in-memory storage
     const userTokens = global.userTokens || {};
-    const tokenEntries = Object.values(userTokens);
     
-    if (tokenEntries.length === 0) {
+    // If email provided, look for specific user
+    if (userEmail && userTokens[userEmail]) {
+      const tokens = userTokens[userEmail];
+      const isExpired = tokens.expiryDate && Date.now() >= tokens.expiryDate;
+      
+      console.log(`📧 Found tokens in memory for: ${userEmail}, expired: ${isExpired}`);
+      
       return res.json({ 
-        connected: false, 
-        email: '',
-        message: 'No Google Calendar connection found' 
+        connected: !isExpired, 
+        email: tokens.email,
+        name: tokens.name,
+        source: 'memory',
+        connectedAt: tokens.connectedAt,
+        isExpired: isExpired,
+        debug: {
+          hasTokens: true,
+          expiryDate: tokens.expiryDate
+        }
       });
     }
     
+    // If no email provided, check if we have any tokens
+    const tokenEntries = Object.values(userTokens);
+    
+    if (tokenEntries.length === 0) {
+      console.log('❌ No tokens found anywhere');
+      return res.json({ 
+        connected: false, 
+        email: '',
+        message: 'No Google Calendar connection found',
+        source: 'none',
+        debug: {
+          providedEmail: userEmail,
+          availableTokens: Object.keys(userTokens),
+          totalTokens: tokenEntries.length
+        }
+      });
+    }
+    
+    // Return first available token if no specific email requested
     const firstToken = tokenEntries[0];
     const isExpired = firstToken.expiryDate && Date.now() >= firstToken.expiryDate;
+    
+    console.log(`📧 Using first available token: ${firstToken.email}, expired: ${isExpired}`);
     
     res.json({ 
       connected: !isExpired, 
       email: firstToken.email || '',
       name: firstToken.name || '',
+      source: 'memory-first',
       connectedAt: firstToken.connectedAt,
-      isExpired: isExpired
+      isExpired: isExpired,
+      debug: {
+        providedEmail: userEmail,
+        foundEmail: firstToken.email,
+        totalTokens: tokenEntries.length
+      }
     });
+    
   } catch (error) {
-    console.error('Error checking Google auth status:', error);
-    res.json({ 
+    console.error('❌ Error checking Google auth status:', error);
+    res.status(500).json({ 
       connected: false, 
       email: '',
-      error: error.message 
+      error: error.message,
+      debug: {
+        providedEmail: req.query.email,
+        availableTokens: Object.keys(global.userTokens || {})
+      }
     });
   }
 };
-
 // Disconnect Google Calendar
 exports.disconnectGoogleCalendar = async (req, res) => {
   try {
