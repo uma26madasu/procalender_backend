@@ -1,47 +1,35 @@
-// routes/googleCalendarRoutes.js - FIXED VERSION
 const express = require('express');
 const router = express.Router();
-const googleCalendarController = require('../controllers/googleCalendarController');
-const { verifyAuth } = require('../controllers/authController'); // Use the fixed auth from authController
 
 console.log('📝 Loading Google Calendar routes...');
 
-// Public webhook endpoint (no authentication)
-router.post('/webhook', googleCalendarController.handleWebhook);
+// Import controller
+const googleCalendarController = require('../controllers/googleCalendarController');
 
-// Test endpoint to check if routes are loaded
-router.get('/test', (req, res) => {
+console.log('✅ Google Calendar controller imported');
+
+// Define routes
+router.get('/events', googleCalendarController.getCalendarEvents);
+router.get('/calendars', googleCalendarController.getCalendars);
+router.post('/check-conflicts', googleCalendarController.checkConflicts);
+
+// Alternative routes for compatibility
+router.get('/', googleCalendarController.getCalendarEvents);
+
+// Debug route
+router.get('/debug', (req, res) => {
   res.json({
     success: true,
     message: 'Google Calendar routes are working',
-    timestamp: new Date().toISOString(),
     availableEndpoints: [
-      'GET /api/calendar/test',
-      'GET /api/calendar/calendars',
-      'GET /api/calendar/events',
-      'POST /api/calendar/events',
-      'PUT /api/calendar/events/:eventId',
-      'DELETE /api/calendar/events/:eventId',
-      'POST /api/calendar/check-conflicts',
-      'POST /api/calendar/webhook'
-    ]
+      'GET /api/calendar/events?email=user@email.com',
+      'GET /api/calendar/calendars?email=user@email.com',
+      'POST /api/calendar/check-conflicts'
+    ],
+    controllerMethods: Object.keys(googleCalendarController),
+    timestamp: new Date().toISOString()
   });
 });
-
-// All other routes require authentication
-router.use(verifyAuth);
-
-// Calendar listing and events
-router.get('/calendars', googleCalendarController.listCalendars);
-router.get('/events', googleCalendarController.getEvents);
-
-// Conflict checking
-router.post('/check-conflicts', googleCalendarController.checkConflicts);
-
-// Event management
-router.post('/events', googleCalendarController.createEvent);
-router.put('/events/:eventId', googleCalendarController.updateEvent);
-router.delete('/events/:eventId', googleCalendarController.deleteEvent);
 
 console.log('✅ Google Calendar routes configured successfully');
 

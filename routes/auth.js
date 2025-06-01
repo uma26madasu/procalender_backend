@@ -1,21 +1,36 @@
-// routes/auth.js - FIXED VERSION
 const express = require('express');
 const router = express.Router();
-const authController = require('../controllers/authController');
 
 console.log('📝 Loading auth routes...');
 
-// Public routes (no authentication required)
-router.get('/google/url', authController.getGoogleAuthUrl);
+// Import controller
+const authController = require('../controllers/authController');
+
+console.log('✅ Auth controller imported');
+
+// Define routes
+router.get('/google/url', authController.getGoogleOAuthUrl);
 router.get('/google/callback', authController.handleGoogleCallback);
 router.post('/google/callback', authController.handleGoogleCallback);
+router.get('/google/status', authController.checkGoogleOAuthStatus);
+router.post('/google/disconnect', authController.disconnectGoogleOAuth);
 
-// Status check should be public to check current auth state
-router.get('/google/status', authController.getGoogleAuthStatus);
+// Debug route
+router.get('/debug', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Auth routes are working',
+    availableEndpoints: [
+      'GET /api/auth/google/url',
+      'GET /api/auth/google/callback',
+      'POST /api/auth/google/callback',
+      'GET /api/auth/google/status?email=user@email.com',
+      'POST /api/auth/google/disconnect'
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
 
-// Disconnect should be public too (can include email in request body)
-router.post('/google/disconnect', authController.disconnectGoogleCalendar);
-
-console.log('✅ Auth routes configured (all public endpoints)');
+console.log('✅ Auth routes configured successfully');
 
 module.exports = router;
