@@ -25,18 +25,156 @@ app.use(cors({
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'cache-control']
 }));
-  // Force HTTPS in production
+  // 🔧 Enhanced HTTPS forcing middleware for Render.com
 app.use((req, res, next) => {
+  // Trust Render.com proxy headers
+  app.set('trust proxy', 1);
+  
+  // Check if request is secure (multiple methods for Render.com)
+  const isSecure = req.secure || 
+                   req.headers['x-forwarded-proto'] === 'https' ||
+                   req.headers['x-forwarded-ssl'] === 'on' ||
+                   req.connection.encrypted;
+
   // Force HTTPS in production
-  if (process.env.NODE_ENV === 'production') {
-    // Check if request is using HTTP
-    if (req.header('x-forwarded-proto') !== 'https') {
-      console.log(`🔄 Redirecting HTTP to HTTPS: ${req.method} ${req.url}`);
-      return res.redirect(301, `https://${req.get('host')}${req.url}`);
-    }
+  if (process.env.NODE_ENV === 'production' && !isSecure) {
+    const httpsUrl = `https://${req.headers.host}${req.url}`;
+    console.log(`🔄 Forcing HTTPS redirect: ${req.url} -> ${httpsUrl}`);
+    return res.redirect(301, httpsUrl);
   }
+
+  // Set security headers
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('X-Forwarded-Proto', 'https');
+  
   next();
 });
+
+// 🔧 Alternative OAuth Configuration - Update your authController.js
+const getCorrectRedirectUri = (req) => {
+  // Always use HTTPS for production
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://procalender-backend.onrender.com/api/auth/google/callback';
+  }
+  
+  // For development, check the actual protocol
+  const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  return `${protocol}://${req.headers.host}/api/auth/google/callback`;
+};
+
+// 🔧 Updated OAuth callback handler
+exports.handleGoogleCallback = async (req, res) => {
+  try {
+    console.log('🔄 Processing Google OAuth callback...');
+    console.log('🔧 Request details:');
+    console.log('   Method:', req.method);
+    console.log('   Protocol:', req.protocol);
+    console.log('   Secure:', req.secure);
+    console.log('   X-Forwarded-Proto:', req.headers['x-forwarded-proto']);
+    console.log('   Host:', req.headers.host);
+    console.log('   Full URL:', `${req.protocol}://${req.headers.host}${req.originalUrl}`);
+
+    const { code } = req.body;
+    
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Authorization code is required'
+      });
+    }
+
+    // CRITICAL: Use frontend redirect URI (where Google actually redirected the user)
+    const redirectUri = 'https://procalender-frontend-uma26madasus-projects.vercel.app/auth/google/callback';
+    
+    console.log('🔄 Exchanging code for tokens...');
+    console.log('🔧 Using redirect URI for token exchange:', redirectUri);
+
+    // Configure OAuth2 client
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      redirectUri // Use frontend redirect URI where Google actually sent the user
+    );
+
+    // Exchange code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    console.log('✅ Token exchange successful');
+
+    // Set credentials
+    oauth2Client.setCredentials(tokens);
+
+    // Get user info
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const { data: userInfo } = await oauth2.userinfo.get();
+
+    // Save user and tokens to database
+    const user = await User.findOneAndUpdate(
+      { googleId: userInfo.id },
+      {
+        googleId: userInfo.id,
+        email: userInfo.email,
+        name: userInfo.name,
+        picture: userInfo.picture,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        tokenExpiry: tokens.expiry_date,
+        updatedAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    console.log('✅ User saved successfully:', user.email);
+
+    // Return success with user data
+    res.json({
+      success: true,
+      message: `Google Calendar connected successfully for ${user.email}`,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture
+      },
+      tokens: {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expiry_date: tokens.expiry_date
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error during token exchange:', error);
+    
+    // Provide specific error details
+    let errorMessage = 'Authentication failed';
+    let errorDetails = {};
+    
+    if (error.message.includes('redirect_uri_mismatch')) {
+      errorMessage = 'redirect_uri_mismatch';
+      errorDetails = {
+        error: 'redirect_uri_mismatch',
+        expectedUri: 'https://procalender-frontend-uma26madasus-projects.vercel.app/auth/google/callback',
+        receivedProtocol: req.protocol,
+        receivedHost: req.headers.host,
+        suggestion: 'Check Google OAuth configuration'
+      };
+    } else if (error.message.includes('invalid_grant')) {
+      errorMessage = 'invalid_grant';
+      errorDetails = {
+        error: 'Authorization code expired or already used',
+        suggestion: 'Please try logging in again'
+      };
+    }
+
+    console.error('❌ Error in Google OAuth callback:', error);
+    
+    res.status(500).json({
+      success: false,
+      message: errorMessage,
+      debug: errorDetails
+    });
+  }
+};
 // Parse JSON request bodies
 app.use(express.json());
 
