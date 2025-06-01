@@ -1,61 +1,6 @@
-const { google } = require('googleapis');
-const User = require('../models/User');
+// Fixed OAuth callback handler for authController.js
+// Replace the handleGoogleCallback function with this version
 
-console.log('📝 Loading authController...');
-
-// Frontend redirect URI
-const FRONTEND_REDIRECT_URI = 'https://procalender-frontend-uma26madasus-projects.vercel.app/auth/google/callback';
-
-// OAuth scopes
-const SCOPES = [
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/userinfo.profile',
-  'https://www.googleapis.com/auth/userinfo.email'
-];
-
-// Create OAuth2 client
-const createOAuth2Client = () => {
-  return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    FRONTEND_REDIRECT_URI
-  );
-};
-
-// Get Google OAuth URL
-const getGoogleOAuthUrl = (req, res) => {
-  try {
-    console.log('🔄 Generating Google OAuth URL...');
-    
-    const oauth2Client = createOAuth2Client();
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: SCOPES,
-      prompt: 'consent'
-    });
-
-    console.log('✅ OAuth URL generated successfully');
-    
-    res.json({
-      success: true,
-      url: authUrl,
-      debug: {
-        redirectUri: FRONTEND_REDIRECT_URI,
-        scopes: SCOPES
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error generating OAuth URL:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate OAuth URL',
-      error: error.message
-    });
-  }
-};
-
-// Handle Google OAuth callback
 const handleGoogleCallback = async (req, res) => {
   try {
     console.log('🔄 Processing Google OAuth callback...');
@@ -86,21 +31,75 @@ const handleGoogleCallback = async (req, res) => {
     
     console.log('✅ User info retrieved:', userInfo.email);
 
-    // Save user to database
-    const user = await User.findOneAndUpdate(
-      { googleId: userInfo.id },
-      {
-        googleId: userInfo.id,
-        email: userInfo.email,
-        name: userInfo.name,
-        picture: userInfo.picture,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        tokenExpiry: tokens.expiry_date,
-        updatedAt: new Date()
-      },
-      { upsert: true, new: true }
-    );
+    // FIXED: Handle existing users properly
+    let user;
+    
+    try {
+      // First, try to find existing user by email
+      user = await User.findOne({ email: userInfo.email });
+      
+      if (user) {
+        console.log('✅ Existing user found, updating tokens...');
+        
+        // Update existing user
+        user.googleId = userInfo.id;
+        user.name = userInfo.name;
+        user.picture = userInfo.picture;
+        user.accessToken = tokens.access_token;
+        user.refreshToken = tokens.refresh_token;
+        user.tokenExpiry = tokens.expiry_date;
+        user.updatedAt = new Date();
+        
+        await user.save();
+        
+      } else {
+        console.log('✅ New user, creating...');
+        
+        // Create new user
+        user = new User({
+          googleId: userInfo.id,
+          email: userInfo.email,
+          name: userInfo.name,
+          picture: userInfo.picture,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          tokenExpiry: tokens.expiry_date
+        });
+        
+        await user.save();
+      }
+      
+    } catch (dbError) {
+      console.error('❌ Database operation failed:', dbError);
+      
+      // If still getting duplicate key error, try alternative approach
+      if (dbError.code === 11000) {
+        console.log('🔄 Duplicate key error, trying alternative update...');
+        
+        user = await User.findOneAndUpdate(
+          { email: userInfo.email },
+          {
+            googleId: userInfo.id,
+            name: userInfo.name,
+            picture: userInfo.picture,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            tokenExpiry: tokens.expiry_date,
+            updatedAt: new Date()
+          },
+          { 
+            new: true,
+            runValidators: true
+          }
+        );
+        
+        if (!user) {
+          throw new Error('Failed to update existing user');
+        }
+      } else {
+        throw dbError;
+      }
+    }
 
     console.log('✅ User saved to database:', user.email);
 
@@ -129,110 +128,3 @@ const handleGoogleCallback = async (req, res) => {
     });
   }
 };
-
-// Check Google OAuth status
-const checkGoogleOAuthStatus = async (req, res) => {
-  try {
-    console.log('🔄 Checking OAuth status...');
-    console.log('   Query:', req.query);
-    console.log('   Body:', req.body);
-    
-    const email = req.query.email || req.body.email;
-    
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email parameter is required'
-      });
-    }
-
-    const user = await User.findOne({ email: email });
-    
-    if (!user) {
-      return res.json({
-        connected: false,
-        message: 'User not found',
-        email: email
-      });
-    }
-
-    const now = new Date();
-    const tokenExpiry = new Date(user.tokenExpiry);
-    const isExpired = now >= tokenExpiry;
-
-    console.log('✅ User found:', user.email);
-
-    res.json({
-      connected: true,
-      email: user.email,
-      name: user.name,
-      picture: user.picture,
-      connectedAt: user.updatedAt,
-      isExpired: isExpired,
-      debug: {
-        foundEmail: user.email,
-        hasAccessToken: !!user.accessToken,
-        hasRefreshToken: !!user.refreshToken,
-        totalTokens: 1
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error checking OAuth status:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to check OAuth status',
-      error: error.message
-    });
-  }
-};
-
-// Disconnect Google OAuth
-const disconnectGoogleOAuth = async (req, res) => {
-  try {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required'
-      });
-    }
-
-    await User.findOneAndUpdate(
-      { email: email },
-      {
-        $unset: {
-          accessToken: "",
-          refreshToken: "",
-          tokenExpiry: ""
-        }
-      }
-    );
-
-    res.json({
-      success: true,
-      message: `Google Calendar disconnected for ${email}`
-    });
-
-  } catch (error) {
-    console.error('❌ Error disconnecting OAuth:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to disconnect OAuth',
-      error: error.message
-    });
-  }
-};
-
-console.log('✅ authController functions defined');
-
-// Export all functions
-module.exports = {
-  getGoogleOAuthUrl,
-  handleGoogleCallback,
-  checkGoogleOAuthStatus,
-  disconnectGoogleOAuth
-};
-
-console.log('✅ authController exported successfully');
