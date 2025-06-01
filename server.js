@@ -25,7 +25,18 @@ app.use(cors({
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'cache-control']
 }));
-
+  // Force HTTPS in production
+app.use((req, res, next) => {
+  // Force HTTPS in production
+  if (process.env.NODE_ENV === 'production') {
+    // Check if request is using HTTP
+    if (req.header('x-forwarded-proto') !== 'https') {
+      console.log(`🔄 Redirecting HTTP to HTTPS: ${req.method} ${req.url}`);
+      return res.redirect(301, `https://${req.get('host')}${req.url}`);
+    }
+  }
+  next();
+});
 // Parse JSON request bodies
 app.use(express.json());
 
