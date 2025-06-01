@@ -1,75 +1,155 @@
-// src/models/User.js
+// models/User.js - Complete Fixed User Schema
+
 const mongoose = require('mongoose');
-const validator = require('validator');
 
-// Simple Google tokens schema - no required fields
-const googleTokensSchema = new mongoose.Schema({
-  accessToken: String,
-  refreshToken: String,
-  expiryDate: Date,
-  scope: String,
-  tokenType: String,
-  idToken: String
-}, { _id: false });
+console.log('📝 Loading User model...');
 
-// Simple user schema - minimal required fields
 const userSchema = new mongoose.Schema({
+  // Google OAuth fields
+  googleId: {
+    type: String,
+    required: false,
+    unique: true,
+    sparse: true // Allows multiple null values
+  },
+  
+  // Basic user info
   email: {
     type: String,
     required: true,
     unique: true,
     lowercase: true,
-    trim: true,
-    validate: {
-      validator: validator.isEmail,
-      message: 'Please provide a valid email address'
-    }
+    trim: true
   },
+  
   name: {
     type: String,
     required: true,
     trim: true
   },
-  firebaseUid: {
+  
+  picture: {
     type: String,
-    required: false, // NOT REQUIRED
-    unique: true,
-    sparse: true // Allow multiple null values
+    required: false
   },
-  googleTokens: googleTokensSchema, // NOT REQUIRED
-  role: {
+  
+  // Google Calendar OAuth tokens
+  accessToken: {
     type: String,
-    enum: ['user', 'admin'],
-    default: 'user'
+    required: false
+  },
+  
+  refreshToken: {
+    type: String,
+    required: false
+  },
+  
+  tokenExpiry: {
+    type: Date,
+    required: false
+  },
+  
+  // User preferences and settings
+  preferences: {
+    timezone: {
+      type: String,
+      default: 'UTC'
+    },
+    notifications: {
+      type: Boolean,
+      default: true
+    },
+    defaultCalendar: {
+      type: String,
+      default: 'primary'
+    }
+  },
+  
+  // Account status
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  
+  lastLogin: {
+    type: Date,
+    default: Date.now
+  },
+  
+  // Timestamps
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
 }, {
-  timestamps: true,
+  // Schema options
+  timestamps: true, // Automatically manages createdAt and updatedAt
+  strict: true, // Enforce schema structure
+  
+  // Transform output
   toJSON: {
-    virtuals: true,
     transform: function(doc, ret) {
+      // Don't expose sensitive data in JSON responses
+      delete ret.accessToken;
+      delete ret.refreshToken;
       delete ret.__v;
       return ret;
     }
   }
 });
 
-// Indexes
-userSchema.index({ email: 1 }, { unique: true });
-userSchema.index({ firebaseUid: 1 }, { unique: true, sparse: true });
+// Indexes for better query performance
+userSchema.index({ email: 1 });
+userSchema.index({ googleId: 1 });
+userSchema.index({ createdAt: -1 });
 
-// Error handling
-userSchema.post('save', function(error, doc, next) {
-  if (error.name === 'MongoServerError' && error.code === 11000) {
-    if (error.message.includes('email')) {
-      next(new Error('Email address is already registered'));
-    } else if (error.message.includes('firebaseUid')) {
-      next(new Error('User with this Firebase ID is already registered'));
-    } else {
-      next(error);
-    }
-  } else {
-    next(error);
-  }
+// Pre-save middleware to update the updatedAt field
+userSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
 });
 
-module.exports = mongoose.model('User', userSchema);
+// Instance methods
+userSchema.methods.updateLastLogin = function() {
+  this.lastLogin = new Date();
+  return this.save();
+};
+
+userSchema.methods.hasValidTokens = function() {
+  if (!this.accessToken) return false;
+  if (!this.tokenExpiry) return true; // Assume valid if no expiry set
+  return new Date() < new Date(this.tokenExpiry);
+};
+
+userSchema.methods.clearTokens = function() {
+  this.accessToken = undefined;
+  this.refreshToken = undefined;
+  this.tokenExpiry = undefined;
+  return this.save();
+};
+
+// Static methods
+userSchema.statics.findByEmail = function(email) {
+  return this.findOne({ email: email.toLowerCase() });
+};
+
+userSchema.statics.findByGoogleId = function(googleId) {
+  return this.findOne({ googleId: googleId });
+};
+
+userSchema.statics.findActiveUsers = function() {
+  return this.find({ isActive: true });
+};
+
+console.log('✅ User schema defined with OAuth fields');
+
+const User = mongoose.model('User', userSchema);
+
+console.log('✅ User model created successfully');
+
+module.exports = User;
