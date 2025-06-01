@@ -1,13 +1,20 @@
-// controllers/authController.js - FIXED VERSION
+// controllers/authController.js - DEBUG VERSION
 const { google } = require('googleapis');
 const User = require('../models/User');
 
-// OAuth2 configuration - Ensure this matches your .env exactly
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI // This MUST match Google Cloud Console
-);
+// OAuth2 configuration with explicit redirect URI handling
+const createOAuth2Client = () => {
+  const client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+  
+  // Explicitly set the redirect URI to ensure consistency
+  client.redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  
+  return client;
+};
 
 // OAuth scopes
 const SCOPES = [
@@ -17,45 +24,70 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.profile'
 ];
 
-// In-memory token storage (for immediate fix)
+// In-memory token storage
 global.userTokens = global.userTokens || {};
 
-// Generate Google OAuth URL
+// Generate Google OAuth URL with debugging
 exports.getGoogleAuthUrl = async (req, res) => {
   try {
     console.log('🔄 Generating Google OAuth URL...');
-    console.log('🔧 Using redirect URI:', process.env.GOOGLE_REDIRECT_URI);
+    console.log('🔧 Environment check:');
+    console.log('   GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing');
+    console.log('   GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'Set' : 'Missing');
+    console.log('   GOOGLE_REDIRECT_URI:', process.env.GOOGLE_REDIRECT_URI);
+    
+    const oauth2Client = createOAuth2Client();
     
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
       prompt: 'consent',
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI // Explicitly set redirect URI
+      redirect_uri: process.env.GOOGLE_REDIRECT_URI, // Explicitly set
+      include_granted_scopes: true
     });
 
     console.log('✅ Generated OAuth URL successfully');
+    console.log('🔧 Auth URL contains redirect_uri:', authUrl.includes(process.env.GOOGLE_REDIRECT_URI));
+    
+    // Extract the redirect_uri from the generated URL for debugging
+    const urlParams = new URLSearchParams(authUrl.split('?')[1]);
+    const redirectUriInUrl = urlParams.get('redirect_uri');
+    
     res.json({ 
       success: true, 
       url: authUrl,
-      redirectUri: process.env.GOOGLE_REDIRECT_URI // Debug info
+      debug: {
+        configuredRedirectUri: process.env.GOOGLE_REDIRECT_URI,
+        urlRedirectUri: redirectUriInUrl,
+        match: process.env.GOOGLE_REDIRECT_URI === redirectUriInUrl,
+        clientId: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing'
+      }
     });
   } catch (error) {
     console.error('❌ Error generating OAuth URL:', error);
     res.status(500).json({ 
       success: false, 
       message: 'Failed to generate OAuth URL',
-      error: error.message
+      error: error.message,
+      debug: {
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+        clientId: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing'
+      }
     });
   }
 };
 
-// Handle Google OAuth callback with improved error handling
+// Handle Google OAuth callback with enhanced debugging
 exports.handleGoogleCallback = async (req, res) => {
   try {
     console.log('🔄 Processing Google OAuth callback...');
-    console.log('🔧 Request method:', req.method);
-    console.log('🔧 Query params:', req.query);
-    console.log('🔧 Expected redirect URI:', process.env.GOOGLE_REDIRECT_URI);
+    console.log('🔧 Request details:');
+    console.log('   Method:', req.method);
+    console.log('   Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('   Query:', JSON.stringify(req.query, null, 2));
+    console.log('   Body:', JSON.stringify(req.body, null, 2));
+    console.log('   URL:', req.url);
+    console.log('   Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
     
     const code = req.query.code || req.body.code;
     const error = req.query.error;
@@ -99,112 +131,136 @@ exports.handleGoogleCallback = async (req, res) => {
 
     // Exchange authorization code for tokens
     console.log('🔄 Exchanging code for tokens...');
+    console.log('🔧 Using redirect URI for token exchange:', process.env.GOOGLE_REDIRECT_URI);
     
-    // Explicitly set redirect URI to match what we sent to Google
-    oauth2Client.redirectUri = process.env.GOOGLE_REDIRECT_URI;
+    const oauth2Client = createOAuth2Client();
     
-    const { tokens } = await oauth2Client.getToken(code);
-    
-    if (!tokens.access_token) {
-      throw new Error('No access token received from Google');
-    }
+    // Create the token request manually for debugging
+    try {
+      const { tokens } = await oauth2Client.getToken({
+        code: code,
+        redirect_uri: process.env.GOOGLE_REDIRECT_URI
+      });
+      
+      if (!tokens.access_token) {
+        throw new Error('No access token received from Google');
+      }
 
-    console.log('✅ Received tokens from Google');
+      console.log('✅ Received tokens from Google');
+      console.log('🔧 Token details:', {
+        hasAccessToken: !!tokens.access_token,
+        hasRefreshToken: !!tokens.refresh_token,
+        expiryDate: tokens.expiry_date,
+        scope: tokens.scope
+      });
 
-    // Set credentials for this session
-    oauth2Client.setCredentials(tokens);
+      // Set credentials for user info request
+      oauth2Client.setCredentials(tokens);
 
-    // Get user information from Google
-    console.log('🔄 Fetching user information...');
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-    const userInfo = await oauth2.userinfo.get();
-    
-    const googleUser = userInfo.data;
-    console.log('✅ Google user info received:', {
-      id: googleUser.id,
-      email: googleUser.email,
-      name: googleUser.name
-    });
-
-    // Find or create user in database
-    let user = await User.findOne({ email: googleUser.email });
-    
-    if (!user) {
-      // Create new user
-      user = new User({
+      // Get user information from Google
+      console.log('🔄 Fetching user information...');
+      const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+      const userInfo = await oauth2.userinfo.get();
+      
+      const googleUser = userInfo.data;
+      console.log('✅ Google user info received:', {
+        id: googleUser.id,
         email: googleUser.email,
-        name: googleUser.name,
-        googleTokens: {
+        name: googleUser.name
+      });
+
+      // Find or create user in database
+      let user = await User.findOne({ email: googleUser.email });
+      
+      if (!user) {
+        console.log('🔄 Creating new user...');
+        user = new User({
+          email: googleUser.email,
+          name: googleUser.name,
+          googleTokens: {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
+            scope: tokens.scope,
+            tokenType: tokens.token_type || 'Bearer',
+            idToken: tokens.id_token
+          }
+        });
+      } else {
+        console.log('🔄 Updating existing user tokens...');
+        user.googleTokens = {
           accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
+          refreshToken: tokens.refresh_token || user.googleTokens?.refreshToken,
           expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
           scope: tokens.scope,
           tokenType: tokens.token_type || 'Bearer',
           idToken: tokens.id_token
-        }
-      });
-      console.log('🔄 Creating new user...');
-    } else {
-      // Update existing user tokens
-      user.googleTokens = {
+        };
+      }
+      
+      await user.save();
+
+      // Store tokens in memory for immediate use
+      global.userTokens[googleUser.email] = {
         accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token || user.googleTokens?.refreshToken,
-        expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
+        refreshToken: tokens.refresh_token,
+        expiryDate: tokens.expiry_date,
         scope: tokens.scope,
-        tokenType: tokens.token_type || 'Bearer',
-        idToken: tokens.id_token
+        tokenType: tokens.token_type,
+        email: googleUser.email,
+        name: googleUser.name,
+        userId: user._id.toString(),
+        connectedAt: new Date()
       };
-      console.log('🔄 Updating existing user tokens...');
-    }
-    
-    await user.save();
 
-    // Store tokens in memory for immediate use
-    global.userTokens[googleUser.email] = {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      expiryDate: tokens.expiry_date,
-      scope: tokens.scope,
-      tokenType: tokens.token_type,
-      email: googleUser.email,
-      name: googleUser.name,
-      userId: user._id.toString(),
-      connectedAt: new Date()
-    };
+      console.log('✅ User saved and tokens stored for:', googleUser.email);
+      
+      const successMessage = `Google Calendar connected successfully for ${googleUser.email}!`;
 
-    console.log('✅ User saved and tokens stored for:', googleUser.email);
-    
-    const successMessage = `Google Calendar connected successfully for ${googleUser.email}!`;
+      // Return appropriate response based on request method
+      if (req.method === 'POST') {
+        return res.json({ 
+          success: true, 
+          message: successMessage,
+          user: {
+            id: user._id,
+            email: googleUser.email,
+            name: googleUser.name
+          }
+        });
+      }
 
-    // Return appropriate response based on request method
-    if (req.method === 'POST') {
-      return res.json({ 
-        success: true, 
-        message: successMessage,
-        user: {
-          id: user._id,
-          email: googleUser.email,
-          name: googleUser.name
+      // Redirect for GET requests (from Google)
+      res.redirect(
+        `${process.env.FRONTEND_URL}?` +
+        `message=${encodeURIComponent(successMessage)}&` +
+        `type=success&` +
+        `email=${encodeURIComponent(googleUser.email)}`
+      );
+
+    } catch (tokenError) {
+      console.error('❌ Error during token exchange:', tokenError);
+      
+      if (tokenError.message?.includes('redirect_uri_mismatch')) {
+        console.error('🔧 REDIRECT_URI_MISMATCH DEBUG:');
+        console.error('   Configured URI:', process.env.GOOGLE_REDIRECT_URI);
+        console.error('   Request came from:', req.get('host'));
+        console.error('   Full request URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
+        
+        // Check if there's a URL mismatch
+        const expectedHost = 'procalender-backend.onrender.com';
+        const actualHost = req.get('host');
+        
+        if (actualHost !== expectedHost) {
+          console.error('   HOST MISMATCH! Expected:', expectedHost, 'Got:', actualHost);
         }
-      });
+      }
+      
+      throw tokenError;
     }
-
-    // Redirect for GET requests (from Google)
-    res.redirect(
-      `${process.env.FRONTEND_URL}?` +
-      `message=${encodeURIComponent(successMessage)}&` +
-      `type=success&` +
-      `email=${encodeURIComponent(googleUser.email)}`
-    );
 
   } catch (error) {
     console.error('❌ Error in Google OAuth callback:', error);
-    
-    // Log specific error details for debugging
-    if (error.message?.includes('redirect_uri_mismatch')) {
-      console.error('🔧 Redirect URI mismatch! Check Google Cloud Console configuration.');
-      console.error('🔧 Expected URI:', process.env.GOOGLE_REDIRECT_URI);
-    }
     
     const errorMessage = error.message || 'Authentication failed. Please try again.';
     
@@ -214,6 +270,7 @@ exports.handleGoogleCallback = async (req, res) => {
         message: errorMessage,
         debug: {
           redirectUri: process.env.GOOGLE_REDIRECT_URI,
+          requestUrl: req.protocol + '://' + req.get('host') + req.originalUrl,
           error: error.message
         }
       });
@@ -228,7 +285,6 @@ exports.handleGoogleCallback = async (req, res) => {
 // Check Google Calendar connection status
 exports.getGoogleAuthStatus = async (req, res) => {
   try {
-    // Check database for user tokens
     const userEmail = req.query.email || req.user?.email;
     
     if (userEmail) {
@@ -247,7 +303,6 @@ exports.getGoogleAuthStatus = async (req, res) => {
       }
     }
     
-    // Check in-memory storage as fallback
     const userTokens = global.userTokens || {};
     const tokenEntries = Object.values(userTokens);
     
@@ -285,16 +340,12 @@ exports.disconnectGoogleCalendar = async (req, res) => {
     const userEmail = req.user?.email || req.body.email;
     
     if (userEmail) {
-      // Clear from database
       await User.updateOne(
         { email: userEmail },
         { $unset: { googleTokens: "" } }
       );
-      
-      // Clear from memory
       delete global.userTokens[userEmail];
     } else {
-      // Clear all stored tokens if no specific user
       global.userTokens = {};
     }
     
@@ -312,39 +363,9 @@ exports.disconnectGoogleCalendar = async (req, res) => {
   }
 };
 
-// Auth middleware to use stored tokens
+// Simplified auth middleware
 exports.verifyAuth = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    let userEmail = null;
-    
-    // Try to get user email from various sources
-    if (authHeader?.startsWith('Bearer ')) {
-      // Handle JWT token or direct email
-      const token = authHeader.split(' ')[1];
-      
-      // Check if it's an email (simple check)
-      if (token.includes('@')) {
-        userEmail = token;
-      }
-    }
-    
-    // Check query params
-    if (!userEmail) {
-      userEmail = req.query.email;
-    }
-    
-    // Look up user in database first
-    if (userEmail) {
-      const user = await User.findOne({ email: userEmail });
-      if (user?.googleTokens?.accessToken) {
-        req.user = user;
-        req.googleTokens = user.googleTokens;
-        return next();
-      }
-    }
-    
-    // Fallback to in-memory storage
     const userTokens = global.userTokens || {};
     const tokenEntries = Object.values(userTokens);
     
@@ -355,7 +376,6 @@ exports.verifyAuth = async (req, res, next) => {
       });
     }
     
-    // Use first available token
     req.googleTokens = tokenEntries[0];
     req.user = { 
       email: tokenEntries[0].email,
