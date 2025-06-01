@@ -1,9 +1,11 @@
-// server.js - Fixed version with Mongoose
+// server.js - Enhanced Production-Ready Version
 const express = require('express');
-const mongoose = require('mongoose'); // Use Mongoose instead of native MongoDB
+const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 // Initialize the Express app
@@ -38,18 +40,30 @@ dirLog(controllersPath, 'Controllers');
 const middlewarePath = path.join(__dirname, 'middleware');
 dirLog(middlewarePath, 'Middleware');
 
+// Security Middleware
+app.use(helmet());
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later'
+});
+app.use(limiter);
+
 // Enable CORS
-app.use(cors({
+const corsOptions = {
   origin: [
     'https://procalender-frontend.vercel.app',
     'https://procalender-frontend-uma26madasus-projects.vercel.app',
     'http://localhost:3000',
-    'http://localhost:5173'  // Add Vite dev server
+    'http://localhost:5173'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization','cache-control']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'cache-control']
+};
+app.use(cors(corsOptions));
 
 // Parse JSON request bodies
 app.use(express.json());
@@ -60,33 +74,62 @@ console.log("MONGODB_URI from env (first 10 chars):", process.env.MONGODB_URI ? 
 // Use environment variable or fallback to hardcoded URI
 const mongoUri = process.env.MONGODB_URI || "mongodb+srv://umamadasu:Impala%40007@cluster0.h4opqie.mongodb.net/procalender?retryWrites=true&w=majority&appName=Cluster0";
 
-// Connect to MongoDB using Mongoose
+// Connect to MongoDB with retry logic
 async function connectToMongoDB() {
-  try {
-    await mongoose.connect(mongoUri, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    console.log("Connected to MongoDB successfully with Mongoose!");
-    return mongoose.connection.db;
-  } catch (error) {
-    console.error("MongoDB connection error:", error);
-    throw error;
+  const maxRetries = 5;
+  let retries = 0;
+  
+  while (retries < maxRetries) {
+    try {
+      await mongoose.connect(mongoUri, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        retryWrites: true,
+        retryReads: true
+      });
+      console.log("✅ Connected to MongoDB successfully with Mongoose!");
+      return mongoose.connection.db;
+    } catch (error) {
+      retries++;
+      console.error(`❌ MongoDB connection attempt ${retries} failed:`, error.message);
+      if (retries >= maxRetries) throw error;
+      await new Promise(res => setTimeout(res, 5000)); // wait 5 seconds
+    }
+  }
+}
+
+// Check required environment variables
+function checkRequiredEnvVars() {
+  const requiredVars = [
+    'MONGODB_URI',
+    'JWT_SECRET',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_REDIRECT_URI'
+  ];
+  
+  const missingVars = requiredVars.filter(v => !process.env[v]);
+  if (missingVars.length > 0) {
+    console.error('❌ Missing required environment variables:', missingVars);
+    process.exit(1);
   }
 }
 
 // Health check endpoint
-app.get('/', (req, res) => {
-  res.json({
-    status: 'Success',
-    message: 'ProCalender Backend API is running',
+app.get('/health', (req, res) => {
+  const status = {
+    status: 'UP',
+    db: mongoose.connection.readyState === 1 ? 'UP' : 'DOWN',
     timestamp: new Date().toISOString(),
-    environment: {
-      nodeVersion: process.version,
-      platform: process.platform,
-      mongooseConnection: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'
-    }
-  });
+    uptime: process.uptime(),
+    version: process.env.npm_package_version || 'unknown'
+  };
+  
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json(status);
+  }
+  
+  res.json(status);
 });
 
 // Test API endpoint
@@ -98,7 +141,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// MongoDB test endpoint (updated for Mongoose)
+// MongoDB test endpoint
 app.get('/api/mongodb-test', async (req, res) => {
   try {
     const collections = await mongoose.connection.db.listCollections().toArray();
@@ -144,18 +187,18 @@ app.get('/api/test-config', (req, res) => {
       isConsistent: process.env.VITE_API_URL === process.env.GOOGLE_REDIRECT_URI?.split('/api')[0]
     },
     
+    security: {
+      helmet: '✅ Enabled',
+      rateLimiting: '✅ Enabled (100 requests/15min)',
+      cors: '✅ Enabled for specified origins'
+    },
+    
     testEndpoints: [
+      'GET /health - Service health check',
       'GET /api/test-config - This endpoint',
       'GET /api/auth/google/url - Get OAuth URL',
       'GET /api/auth/google/callback - OAuth callback',
       'GET /api/auth/google/status - Check connection status'
-    ],
-    
-    nextSteps: [
-      '1. Fix any ❌ Missing items above',
-      '2. Test /api/auth/google/url endpoint',
-      '3. Complete OAuth flow in browser',
-      '4. Check Google Calendar connection'
     ]
   };
   
@@ -166,46 +209,72 @@ app.get('/api/test-config', (req, res) => {
   });
 });
 
+// Debug endpoint
+app.get('/api/debug/env', (req, res) => {
+  res.json({
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
+    NODE_ENV: process.env.NODE_ENV,
+    MONGOOSE_CONNECTION: mongoose.connection.readyState,
+    AVAILABLE_COLLECTIONS: mongoose.connection.readyState === 1 ? 'Connected - check /api/mongodb-test' : 'Not connected'
+  });
+});
+
 // Initialize the app after connecting to MongoDB
 async function initializeApp() {
   try {
+    // Check required environment variables
+    checkRequiredEnvVars();
+    
     // Connect to MongoDB first
     await connectToMongoDB();
     
     // Load auth routes
     try {
+      console.log('📝 Loading auth routes...');
       if (fs.existsSync(path.join(routesPath, 'auth.js'))) {
         const authRoutes = require('./routes/auth');
         app.use('/api/auth', authRoutes);
-        console.log('✅ Successfully loaded auth routes');
+        console.log('✅ Auth routes loaded successfully at /api/auth');
       } else {
         console.log('❌ Auth routes file not found');
+        // Create basic auth endpoints as fallback
+        app.get('/api/auth/google/url', (req, res) => {
+          res.status(500).json({ success: false, message: 'Auth routes not configured' });
+        });
       }
     } catch (error) {
       console.error('❌ Error loading auth routes:', error.message);
+      console.error('❌ Stack:', error.stack);
     }
 
     // Load Google Calendar routes
     try {
+      console.log('📝 Loading Google Calendar routes...');
       if (fs.existsSync(path.join(routesPath, 'googleCalendarRoutes.js'))) {
         const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
         app.use('/api/calendar', googleCalendarRoutes);
-        console.log('✅ Successfully loaded Google Calendar routes');
+        console.log('✅ Google Calendar routes loaded successfully at /api/calendar');
       } else {
         console.log('❌ Google Calendar routes file not found');
+        // Create basic calendar endpoints as fallback
+        app.get('/api/calendar/events', (req, res) => {
+          res.status(500).json({ success: false, message: 'Calendar routes not configured' });
+        });
       }
     } catch (error) {
       console.error('❌ Error loading Google Calendar routes:', error.message);
+      console.error('❌ Stack:', error.stack);
     }
 
     // Load other routes
     try {
+      console.log('📝 Loading window routes...');
       if (fs.existsSync(path.join(routesPath, 'windows.js'))) {
         const windowRoutes = require('./routes/windows');
         app.use('/api/windows', windowRoutes);
-        console.log('✅ Successfully loaded window routes');
+        console.log('✅ Window routes loaded successfully');
       } else {
-        // Placeholder route for windows
         app.get('/api/windows', (req, res) => {
           res.json({ message: 'Windows API endpoint - Coming soon' });
         });
@@ -217,52 +286,121 @@ async function initializeApp() {
       });
     }
 
-    // Placeholder routes for other endpoints
-    app.get('/api/bookings', (req, res) => {
-      res.json({ message: 'Bookings API endpoint - Coming soon' });
-    });
+    // Load bookings routes if exists
+    try {
+      if (fs.existsSync(path.join(routesPath, 'bookings.js'))) {
+        const bookingsRoutes = require('./routes/bookings');
+        app.use('/api/bookings', bookingsRoutes);
+        console.log('✅ Bookings routes loaded successfully');
+      } else {
+        app.get('/api/bookings', (req, res) => {
+          res.json({ message: 'Bookings API endpoint - Coming soon' });
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error loading bookings routes:', error);
+    }
 
-    app.get('/api/links', (req, res) => {
-      res.json({ message: 'Links API endpoint - Coming soon' });
+    // Load links routes if exists
+    try {
+      if (fs.existsSync(path.join(routesPath, 'links.js'))) {
+        const linksRoutes = require('./routes/links');
+        app.use('/api/links', linksRoutes);
+        console.log('✅ Links routes loaded successfully');
+      } else {
+        app.get('/api/links', (req, res) => {
+          res.json({ message: 'Links API endpoint - Coming soon' });
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error loading links routes:', error);
+    }
+
+    // Debugging endpoints
+    app.get('/api/debug/routes', (req, res) => {
+      const routes = [];
+      
+      app._router.stack.forEach((middleware) => {
+        if (middleware.route) {
+          routes.push({
+            path: middleware.route.path,
+            methods: Object.keys(middleware.route.methods)
+          });
+        } else if (middleware.name === 'router') {
+          middleware.handle.stack.forEach((handler) => {
+            if (handler.route) {
+              routes.push({
+                path: middleware.regexp.source.replace('\\/?(?=\\/|$)', '') + handler.route.path,
+                methods: Object.keys(handler.route.methods)
+              });
+            }
+          });
+        }
+      });
+      
+      res.json({
+        success: true,
+        message: 'Available routes',
+        routes: routes,
+        environment: {
+          GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing',
+          GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'Missing',
+          FRONTEND_URL: process.env.FRONTEND_URL || 'Missing'
+        }
+      });
     });
 
     // Global error handler
     app.use((err, req, res, next) => {
-      console.error('Global error handler:', err);
+      console.error('🔥 Global error handler:', err);
       res.status(500).json({
         success: false,
         message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+        error: process.env.NODE_ENV === 'development' ? {
+          message: err.message,
+          stack: err.stack
+        } : 'Something went wrong'
       });
     });
 
-    // 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route ${req.originalUrl} not found`,
-    availableRoutes: [
-      'GET /',
-      'GET /api/test',
-      'GET /api/test-config',
-      'GET /api/mongodb-test',
-      'GET /api/auth/google/url',
-      'GET /api/auth/google/callback',
-      'GET /api/auth/google/status',
-      'POST /api/auth/google/disconnect',
-      'GET /api/calendar/events',        // ADD THESE
-      'GET /api/calendar/calendars',     // ADD THESE
-      'POST /api/calendar/check-conflicts' // ADD THESE
-    ]
-  });
-});
+    // Enhanced 404 handler with better route listing
+    app.use('*', (req, res) => {
+      console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
+      res.status(404).json({
+        success: false,
+        message: `Route ${req.method} ${req.originalUrl} not found`,
+        availableRoutes: [
+          'GET /health',
+          'GET /api/test',
+          'GET /api/test-config',
+          'GET /api/mongodb-test',
+          'GET /api/debug/routes',
+          'GET /api/debug/env',
+          'GET /api/auth/google/url',
+          'GET /api/auth/google/callback',
+          'POST /api/auth/google/callback',
+          'GET /api/auth/google/status',
+          'POST /api/auth/google/disconnect',
+          'GET /api/calendar/events',
+          'GET /api/calendar/calendars',
+          'POST /api/calendar/check-conflicts',
+          'GET /api/windows',
+          'GET /api/bookings',
+          'GET /api/links'
+        ],
+        hint: 'Visit /api/debug/routes for a complete list of available routes'
+      });
+    });
 
     // Start the server
     const PORT = process.env.PORT || 10000;
     app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌐 API URL: http://localhost:${PORT}`);
-      console.log(`📋 Test config: http://localhost:${PORT}/api/test-config`);
+      console.log(`🌐 API URL: https://procalender-backend.onrender.com`);
+      console.log(`🏥 Health check: https://procalender-backend.onrender.com/health`);
+      console.log(`📋 Test config: https://procalender-backend.onrender.com/api/test-config`);
+      console.log(`🔧 Debug routes: https://procalender-backend.onrender.com/api/debug/routes`);
+      console.log(`🔑 OAuth URL: https://procalender-backend.onrender.com/api/auth/google/url`);
     });
     
   } catch (error) {
@@ -287,15 +425,4 @@ process.on('SIGTERM', async () => {
   await mongoose.connection.close();
   console.log('📦 MongoDB connection closed');
   process.exit(0);
-});
-
-// Debug endpoint
-app.get('/api/debug/env', (req, res) => {
-  res.json({
-    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
-    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
-    NODE_ENV: process.env.NODE_ENV,
-    MONGOOSE_CONNECTION: mongoose.connection.readyState,
-    AVAILABLE_COLLECTIONS: mongoose.connection.readyState === 1 ? 'Connected - check /api/mongodb-test' : 'Not connected'
-  });
 });

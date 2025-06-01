@@ -1,12 +1,12 @@
-// controllers/authController.js - UPDATED WITH TOKEN STORAGE
+// controllers/authController.js - FIXED VERSION
 const { google } = require('googleapis');
 const User = require('../models/User');
 
-// OAuth2 configuration
+// OAuth2 configuration - Ensure this matches your .env exactly
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
+  process.env.GOOGLE_REDIRECT_URI // This MUST match Google Cloud Console
 );
 
 // OAuth scopes
@@ -24,37 +24,46 @@ global.userTokens = global.userTokens || {};
 exports.getGoogleAuthUrl = async (req, res) => {
   try {
     console.log('🔄 Generating Google OAuth URL...');
+    console.log('🔧 Using redirect URI:', process.env.GOOGLE_REDIRECT_URI);
     
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
-      prompt: 'consent'
+      prompt: 'consent',
+      redirect_uri: process.env.GOOGLE_REDIRECT_URI // Explicitly set redirect URI
     });
 
     console.log('✅ Generated OAuth URL successfully');
     res.json({ 
       success: true, 
-      url: authUrl 
+      url: authUrl,
+      redirectUri: process.env.GOOGLE_REDIRECT_URI // Debug info
     });
   } catch (error) {
     console.error('❌ Error generating OAuth URL:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Failed to generate OAuth URL' 
+      message: 'Failed to generate OAuth URL',
+      error: error.message
     });
   }
 };
 
-// Handle Google OAuth callback with TOKEN STORAGE
+// Handle Google OAuth callback with improved error handling
 exports.handleGoogleCallback = async (req, res) => {
   try {
     console.log('🔄 Processing Google OAuth callback...');
+    console.log('🔧 Request method:', req.method);
+    console.log('🔧 Query params:', req.query);
+    console.log('🔧 Expected redirect URI:', process.env.GOOGLE_REDIRECT_URI);
     
     const code = req.query.code || req.body.code;
     const error = req.query.error;
+    const state = req.query.state;
 
+    // Handle OAuth errors
     if (error) {
-      console.error('❌ OAuth error:', error);
+      console.error('❌ OAuth error from Google:', error);
       const errorMessage = error === 'access_denied' 
         ? 'Access denied by user' 
         : `OAuth error: ${error}`;
@@ -67,13 +76,14 @@ exports.handleGoogleCallback = async (req, res) => {
       }
       
       return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?message=${encodeURIComponent(errorMessage)}&type=error`
+        `${process.env.FRONTEND_URL}?error=${encodeURIComponent(errorMessage)}`
       );
     }
 
+    // Check for authorization code
     if (!code) {
       console.error('❌ No authorization code received');
-      const message = 'No authorization code received';
+      const message = 'No authorization code received from Google';
       
       if (req.method === 'POST') {
         return res.status(400).json({ 
@@ -83,17 +93,23 @@ exports.handleGoogleCallback = async (req, res) => {
       }
       
       return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard?message=${encodeURIComponent(message)}&type=error`
+        `${process.env.FRONTEND_URL}?error=${encodeURIComponent(message)}`
       );
     }
 
     // Exchange authorization code for tokens
     console.log('🔄 Exchanging code for tokens...');
+    
+    // Explicitly set redirect URI to match what we sent to Google
+    oauth2Client.redirectUri = process.env.GOOGLE_REDIRECT_URI;
+    
     const { tokens } = await oauth2Client.getToken(code);
     
     if (!tokens.access_token) {
       throw new Error('No access token received from Google');
     }
+
+    console.log('✅ Received tokens from Google');
 
     // Set credentials for this session
     oauth2Client.setCredentials(tokens);
@@ -104,13 +120,46 @@ exports.handleGoogleCallback = async (req, res) => {
     const userInfo = await oauth2.userinfo.get();
     
     const googleUser = userInfo.data;
-    console.log('✅ Google user info:', {
+    console.log('✅ Google user info received:', {
       id: googleUser.id,
       email: googleUser.email,
       name: googleUser.name
     });
 
-    // **STORE TOKENS** in memory for immediate use
+    // Find or create user in database
+    let user = await User.findOne({ email: googleUser.email });
+    
+    if (!user) {
+      // Create new user
+      user = new User({
+        email: googleUser.email,
+        name: googleUser.name,
+        googleTokens: {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
+          scope: tokens.scope,
+          tokenType: tokens.token_type || 'Bearer',
+          idToken: tokens.id_token
+        }
+      });
+      console.log('🔄 Creating new user...');
+    } else {
+      // Update existing user tokens
+      user.googleTokens = {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token || user.googleTokens?.refreshToken,
+        expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
+        scope: tokens.scope,
+        tokenType: tokens.token_type || 'Bearer',
+        idToken: tokens.id_token
+      };
+      console.log('🔄 Updating existing user tokens...');
+    }
+    
+    await user.save();
+
+    // Store tokens in memory for immediate use
     global.userTokens[googleUser.email] = {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
@@ -119,11 +168,11 @@ exports.handleGoogleCallback = async (req, res) => {
       tokenType: tokens.token_type,
       email: googleUser.email,
       name: googleUser.name,
+      userId: user._id.toString(),
       connectedAt: new Date()
     };
 
-    console.log('✅ Tokens stored for:', googleUser.email);
-    console.log('✅ Google Calendar connected successfully');
+    console.log('✅ User saved and tokens stored for:', googleUser.email);
     
     const successMessage = `Google Calendar connected successfully for ${googleUser.email}!`;
 
@@ -133,6 +182,7 @@ exports.handleGoogleCallback = async (req, res) => {
         success: true, 
         message: successMessage,
         user: {
+          id: user._id,
           email: googleUser.email,
           name: googleUser.name
         }
@@ -141,7 +191,7 @@ exports.handleGoogleCallback = async (req, res) => {
 
     // Redirect for GET requests (from Google)
     res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?` +
+      `${process.env.FRONTEND_URL}?` +
       `message=${encodeURIComponent(successMessage)}&` +
       `type=success&` +
       `email=${encodeURIComponent(googleUser.email)}`
@@ -150,25 +200,54 @@ exports.handleGoogleCallback = async (req, res) => {
   } catch (error) {
     console.error('❌ Error in Google OAuth callback:', error);
     
+    // Log specific error details for debugging
+    if (error.message?.includes('redirect_uri_mismatch')) {
+      console.error('🔧 Redirect URI mismatch! Check Google Cloud Console configuration.');
+      console.error('🔧 Expected URI:', process.env.GOOGLE_REDIRECT_URI);
+    }
+    
     const errorMessage = error.message || 'Authentication failed. Please try again.';
     
     if (req.method === 'POST') {
       return res.status(500).json({ 
         success: false, 
-        message: errorMessage 
+        message: errorMessage,
+        debug: {
+          redirectUri: process.env.GOOGLE_REDIRECT_URI,
+          error: error.message
+        }
       });
     }
     
     res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?message=${encodeURIComponent(errorMessage)}&type=error`
+      `${process.env.FRONTEND_URL}?error=${encodeURIComponent(errorMessage)}`
     );
   }
 };
 
-// Check Google Calendar connection status - WITH TOKEN CHECK
+// Check Google Calendar connection status
 exports.getGoogleAuthStatus = async (req, res) => {
   try {
-    // Check if we have any stored tokens
+    // Check database for user tokens
+    const userEmail = req.query.email || req.user?.email;
+    
+    if (userEmail) {
+      const user = await User.findOne({ email: userEmail });
+      if (user?.googleTokens?.accessToken) {
+        const isExpired = user.googleTokens.expiryDate && 
+                         Date.now() >= user.googleTokens.expiryDate.getTime();
+        
+        return res.json({ 
+          connected: !isExpired, 
+          email: user.email,
+          name: user.name,
+          connectedAt: user.googleTokens.connectedAt || user.updatedAt,
+          isExpired: isExpired
+        });
+      }
+    }
+    
+    // Check in-memory storage as fallback
     const userTokens = global.userTokens || {};
     const tokenEntries = Object.values(userTokens);
     
@@ -180,10 +259,7 @@ exports.getGoogleAuthStatus = async (req, res) => {
       });
     }
     
-    // Return the first connected account (you can modify this logic)
     const firstToken = tokenEntries[0];
-    
-    // Check if token is expired
     const isExpired = firstToken.expiryDate && Date.now() >= firstToken.expiryDate;
     
     res.json({ 
@@ -203,11 +279,24 @@ exports.getGoogleAuthStatus = async (req, res) => {
   }
 };
 
-// Disconnect Google Calendar - WITH TOKEN CLEANUP
+// Disconnect Google Calendar
 exports.disconnectGoogleCalendar = async (req, res) => {
   try {
-    // Clear all stored tokens
-    global.userTokens = {};
+    const userEmail = req.user?.email || req.body.email;
+    
+    if (userEmail) {
+      // Clear from database
+      await User.updateOne(
+        { email: userEmail },
+        { $unset: { googleTokens: "" } }
+      );
+      
+      // Clear from memory
+      delete global.userTokens[userEmail];
+    } else {
+      // Clear all stored tokens if no specific user
+      global.userTokens = {};
+    }
     
     console.log('✅ Google Calendar tokens cleared');
     res.json({ 
@@ -223,26 +312,63 @@ exports.disconnectGoogleCalendar = async (req, res) => {
   }
 };
 
-// Updated auth middleware to use stored tokens
+// Auth middleware to use stored tokens
 exports.verifyAuth = async (req, res, next) => {
   try {
-    // Check if we have any stored tokens (simplified approach)
+    const authHeader = req.headers.authorization;
+    let userEmail = null;
+    
+    // Try to get user email from various sources
+    if (authHeader?.startsWith('Bearer ')) {
+      // Handle JWT token or direct email
+      const token = authHeader.split(' ')[1];
+      
+      // Check if it's an email (simple check)
+      if (token.includes('@')) {
+        userEmail = token;
+      }
+    }
+    
+    // Check query params
+    if (!userEmail) {
+      userEmail = req.query.email;
+    }
+    
+    // Look up user in database first
+    if (userEmail) {
+      const user = await User.findOne({ email: userEmail });
+      if (user?.googleTokens?.accessToken) {
+        req.user = user;
+        req.googleTokens = user.googleTokens;
+        return next();
+      }
+    }
+    
+    // Fallback to in-memory storage
     const userTokens = global.userTokens || {};
     const tokenEntries = Object.values(userTokens);
     
     if (tokenEntries.length === 0) {
       return res.status(401).json({ 
-        error: 'Unauthorized - No Google Calendar connection found' 
+        error: 'Unauthorized - No Google Calendar connection found',
+        needsAuth: true
       });
     }
     
-    // Attach token info to request for use in calendar routes
-    req.googleTokens = tokenEntries[0]; // Use first available token
+    // Use first available token
+    req.googleTokens = tokenEntries[0];
+    req.user = { 
+      email: tokenEntries[0].email,
+      id: tokenEntries[0].userId 
+    };
     
     console.log('✅ Auth verified with stored tokens');
     next();
   } catch (error) {
     console.error('Auth verification error:', error);
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({ 
+      error: 'Unauthorized',
+      message: error.message
+    });
   }
 };
