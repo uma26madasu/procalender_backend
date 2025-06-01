@@ -189,7 +189,7 @@ async function initializeApp() {
     try {
       if (fs.existsSync(path.join(routesPath, 'googleCalendarRoutes.js'))) {
         const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
-        app.use('/api/google-calendar', googleCalendarRoutes);
+        app.use('/api/calendar', googleCalendarRoutes);
         console.log('✅ Successfully loaded Google Calendar routes');
       } else {
         console.log('❌ Google Calendar routes file not found');
@@ -237,22 +237,25 @@ async function initializeApp() {
     });
 
     // 404 handler
-    app.use('*', (req, res) => {
-      res.status(404).json({
-        success: false,
-        message: `Route ${req.originalUrl} not found`,
-        availableRoutes: [
-          'GET /',
-          'GET /api/test',
-          'GET /api/test-config',
-          'GET /api/mongodb-test',
-          'GET /api/auth/google/url',
-          'GET /api/auth/google/callback',
-          'GET /api/auth/google/status',
-          'POST /api/auth/google/revoke'
-        ]
-      });
-    });
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.originalUrl} not found`,
+    availableRoutes: [
+      'GET /',
+      'GET /api/test',
+      'GET /api/test-config',
+      'GET /api/mongodb-test',
+      'GET /api/auth/google/url',
+      'GET /api/auth/google/callback',
+      'GET /api/auth/google/status',
+      'POST /api/auth/google/disconnect',
+      'GET /api/calendar/events',        // ADD THESE
+      'GET /api/calendar/calendars',     // ADD THESE
+      'POST /api/calendar/check-conflicts' // ADD THESE
+    ]
+  });
+});
 
     // Start the server
     const PORT = process.env.PORT || 10000;

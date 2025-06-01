@@ -1,5 +1,6 @@
-// controllers/authController.js - SIMPLIFIED VERSION WITHOUT DEPENDENCIES
+// controllers/authController.js - UPDATED WITH TOKEN STORAGE
 const { google } = require('googleapis');
+const User = require('../models/User');
 
 // OAuth2 configuration
 const oauth2Client = new google.auth.OAuth2(
@@ -15,6 +16,9 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile'
 ];
+
+// In-memory token storage (for immediate fix)
+global.userTokens = global.userTokens || {};
 
 // Generate Google OAuth URL
 exports.getGoogleAuthUrl = async (req, res) => {
@@ -41,19 +45,14 @@ exports.getGoogleAuthUrl = async (req, res) => {
   }
 };
 
-// Handle Google OAuth callback - SIMPLIFIED VERSION
+// Handle Google OAuth callback with TOKEN STORAGE
 exports.handleGoogleCallback = async (req, res) => {
   try {
     console.log('🔄 Processing Google OAuth callback...');
-    console.log('Request method:', req.method);
-    console.log('Query params:', req.query);
-    console.log('Body:', req.body);
-
-    // Handle both GET (from Google redirect) and POST (from frontend)
+    
     const code = req.query.code || req.body.code;
     const error = req.query.error;
 
-    // Check for OAuth errors
     if (error) {
       console.error('❌ OAuth error:', error);
       const errorMessage = error === 'access_denied' 
@@ -72,7 +71,6 @@ exports.handleGoogleCallback = async (req, res) => {
       );
     }
 
-    // Check for authorization code
     if (!code) {
       console.error('❌ No authorization code received');
       const message = 'No authorization code received';
@@ -90,15 +88,8 @@ exports.handleGoogleCallback = async (req, res) => {
     }
 
     // Exchange authorization code for tokens
-    // IMPORTANT: Use the original redirect_uri that was used to generate the code
-    const originalRedirectUri = req.body.redirect_uri || req.query.redirect_uri;
     console.log('🔄 Exchanging code for tokens...');
-    console.log('Using redirect_uri:', originalRedirectUri);
-    
-    const { tokens } = await oauth2Client.getToken({
-      code: code,
-      redirect_uri: originalRedirectUri
-    });
+    const { tokens } = await oauth2Client.getToken(code);
     
     if (!tokens.access_token) {
       throw new Error('No access token received from Google');
@@ -119,15 +110,21 @@ exports.handleGoogleCallback = async (req, res) => {
       name: googleUser.name
     });
 
-    // TODO: Save tokens to your database if needed
-    // For now, just log success and redirect
-    console.log('✅ OAuth tokens received:', {
-      access_token: tokens.access_token ? 'Present' : 'Missing',
-      refresh_token: tokens.refresh_token ? 'Present' : 'Missing',
-      expiry_date: tokens.expiry_date
-    });
+    // **STORE TOKENS** in memory for immediate use
+    global.userTokens[googleUser.email] = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiryDate: tokens.expiry_date,
+      scope: tokens.scope,
+      tokenType: tokens.token_type,
+      email: googleUser.email,
+      name: googleUser.name,
+      connectedAt: new Date()
+    };
 
+    console.log('✅ Tokens stored for:', googleUser.email);
     console.log('✅ Google Calendar connected successfully');
+    
     const successMessage = `Google Calendar connected successfully for ${googleUser.email}!`;
 
     // Return appropriate response based on request method
@@ -168,31 +165,51 @@ exports.handleGoogleCallback = async (req, res) => {
   }
 };
 
-// Check Google Calendar connection status - SIMPLIFIED
+// Check Google Calendar connection status - WITH TOKEN CHECK
 exports.getGoogleAuthStatus = async (req, res) => {
   try {
-    // For now, just return not connected since we're not storing tokens yet
-    // You can implement token storage later
+    // Check if we have any stored tokens
+    const userTokens = global.userTokens || {};
+    const tokenEntries = Object.values(userTokens);
+    
+    if (tokenEntries.length === 0) {
+      return res.json({ 
+        connected: false, 
+        email: '',
+        message: 'No Google Calendar connection found' 
+      });
+    }
+    
+    // Return the first connected account (you can modify this logic)
+    const firstToken = tokenEntries[0];
+    
+    // Check if token is expired
+    const isExpired = firstToken.expiryDate && Date.now() >= firstToken.expiryDate;
+    
     res.json({ 
-      connected: false, 
-      email: '',
-      message: 'Token storage not implemented yet' 
+      connected: !isExpired, 
+      email: firstToken.email || '',
+      name: firstToken.name || '',
+      connectedAt: firstToken.connectedAt,
+      isExpired: isExpired
     });
   } catch (error) {
     console.error('Error checking Google auth status:', error);
     res.json({ 
       connected: false, 
-      email: '' 
+      email: '',
+      error: error.message 
     });
   }
 };
 
-// Disconnect Google Calendar - SIMPLIFIED
+// Disconnect Google Calendar - WITH TOKEN CLEANUP
 exports.disconnectGoogleCalendar = async (req, res) => {
   try {
-    // For now, just return success
-    // You can implement token cleanup later
-    console.log('✅ Google Calendar disconnect requested');
+    // Clear all stored tokens
+    global.userTokens = {};
+    
+    console.log('✅ Google Calendar tokens cleared');
     res.json({ 
       success: true, 
       message: 'Google Calendar disconnected successfully' 
@@ -206,12 +223,23 @@ exports.disconnectGoogleCalendar = async (req, res) => {
   }
 };
 
-// Simplified auth middleware - no verification for now
+// Updated auth middleware to use stored tokens
 exports.verifyAuth = async (req, res, next) => {
   try {
-    // For now, just continue without verification
-    // You can add your own auth logic here later
-    console.log('Auth middleware - skipping verification for now');
+    // Check if we have any stored tokens (simplified approach)
+    const userTokens = global.userTokens || {};
+    const tokenEntries = Object.values(userTokens);
+    
+    if (tokenEntries.length === 0) {
+      return res.status(401).json({ 
+        error: 'Unauthorized - No Google Calendar connection found' 
+      });
+    }
+    
+    // Attach token info to request for use in calendar routes
+    req.googleTokens = tokenEntries[0]; // Use first available token
+    
+    console.log('✅ Auth verified with stored tokens');
     next();
   } catch (error) {
     console.error('Auth verification error:', error);
