@@ -1,458 +1,358 @@
-// controllers/authController.js - DEBUG VERSION
 const { google } = require('googleapis');
 const User = require('../models/User');
 
-// OAuth2 configuration with explicit redirect URI handling
-const createOAuth2Client = () => {
-  const client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-  );
-  
-  // Explicitly set the redirect URI to ensure consistency
-  client.redirectUri = process.env.GOOGLE_REDIRECT_URI;
-  
-  return client;
-};
+// 🔧 CORRECTED: Use frontend redirect URI consistently
+const FRONTEND_REDIRECT_URI = 'https://procalender-frontend-uma26madasus-projects.vercel.app/auth/google/callback';
 
 // OAuth scopes
 const SCOPES = [
-  'https://www.googleapis.com/auth/calendar',
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile'
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/userinfo.email'
 ];
 
-// In-memory token storage
-global.userTokens = global.userTokens || {};
+// Helper function to create OAuth2 client
+const createOAuth2Client = () => {
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    FRONTEND_REDIRECT_URI // Always use frontend redirect URI
+  );
+};
 
-// Generate Google OAuth URL with debugging
-exports.getGoogleAuthUrl = async (req, res) => {
+// Generate Google OAuth URL
+exports.getGoogleOAuthUrl = (req, res) => {
   try {
     console.log('🔄 Generating Google OAuth URL...');
-    console.log('🔧 Environment check:');
-    console.log('   GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing');
-    console.log('   GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'Set' : 'Missing');
-    console.log('   GOOGLE_REDIRECT_URI:', process.env.GOOGLE_REDIRECT_URI);
     
     const oauth2Client = createOAuth2Client();
-    
+
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
       prompt: 'consent',
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI, // Explicitly set
       include_granted_scopes: true
     });
 
     console.log('✅ Generated OAuth URL successfully');
-    console.log('🔧 Auth URL contains redirect_uri:', authUrl.includes(process.env.GOOGLE_REDIRECT_URI));
-    
-    // Extract the redirect_uri from the generated URL for debugging
-    const urlParams = new URLSearchParams(authUrl.split('?')[1]);
-    const redirectUriInUrl = urlParams.get('redirect_uri');
-    
-    res.json({ 
-      success: true, 
+    console.log('🔧 Using redirect URI:', FRONTEND_REDIRECT_URI);
+
+    res.json({
+      success: true,
       url: authUrl,
       debug: {
-        configuredRedirectUri: process.env.GOOGLE_REDIRECT_URI,
-        urlRedirectUri: redirectUriInUrl,
-        match: process.env.GOOGLE_REDIRECT_URI === redirectUriInUrl,
-        clientId: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing'
+        redirectUri: FRONTEND_REDIRECT_URI,
+        scopes: SCOPES,
+        clientId: process.env.GOOGLE_CLIENT_ID ? 'Present' : 'Missing'
       }
     });
+
   } catch (error) {
     console.error('❌ Error generating OAuth URL:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Failed to generate OAuth URL',
-      error: error.message,
-      debug: {
-        redirectUri: process.env.GOOGLE_REDIRECT_URI,
-        clientId: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Missing'
-      }
+      error: error.message
     });
   }
 };
 
-// Handle Google OAuth callback with enhanced debugging
+// Handle Google OAuth callback
 exports.handleGoogleCallback = async (req, res) => {
   try {
     console.log('🔄 Processing Google OAuth callback...');
     console.log('🔧 Request details:');
     console.log('   Method:', req.method);
-    console.log('   Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('   Query:', JSON.stringify(req.query, null, 2));
-    console.log('   Body:', JSON.stringify(req.body, null, 2));
-    console.log('   URL:', req.url);
-    console.log('   Full URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
+    console.log('   Protocol:', req.protocol);
+    console.log('   Secure:', req.secure);
+    console.log('   X-Forwarded-Proto:', req.headers['x-forwarded-proto']);
+    console.log('   Host:', req.headers.host);
+    console.log('   Body:', req.body);
+
+    const { code } = req.body;
     
-    const code = req.query.code || req.body.code;
-    const error = req.query.error;
-    const state = req.query.state;
-
-    // Handle OAuth errors
-    if (error) {
-      console.error('❌ OAuth error from Google:', error);
-      const errorMessage = error === 'access_denied' 
-        ? 'Access denied by user' 
-        : `OAuth error: ${error}`;
-      
-      if (req.method === 'POST') {
-        return res.status(400).json({ 
-          success: false, 
-          message: errorMessage 
-        });
-      }
-      
-      return res.redirect(
-        `${process.env.FRONTEND_URL}?error=${encodeURIComponent(errorMessage)}`
-      );
-    }
-
-    // Check for authorization code
     if (!code) {
-      console.error('❌ No authorization code received');
-      const message = 'No authorization code received from Google';
-      
-      if (req.method === 'POST') {
-        return res.status(400).json({ 
-          success: false, 
-          message 
-        });
-      }
-      
-      return res.redirect(
-        `${process.env.FRONTEND_URL}?error=${encodeURIComponent(message)}`
-      );
+      console.error('❌ No authorization code provided');
+      return res.status(400).json({
+        success: false,
+        message: 'Authorization code is required'
+      });
     }
 
-    // Exchange authorization code for tokens
     console.log('🔄 Exchanging code for tokens...');
-    console.log('🔧 Using redirect URI for token exchange:', process.env.GOOGLE_REDIRECT_URI);
-    
+    console.log('🔧 Using redirect URI for token exchange:', FRONTEND_REDIRECT_URI);
+
+    // Create OAuth2 client with frontend redirect URI
     const oauth2Client = createOAuth2Client();
-    
-    // Create the token request manually for debugging
-    try {
-      const { tokens } = await oauth2Client.getToken({
-        code: code,
-        redirect_uri: process.env.GOOGLE_REDIRECT_URI
-      });
-      
-      if (!tokens.access_token) {
-        throw new Error('No access token received from Google');
-      }
 
-      console.log('✅ Received tokens from Google');
-      console.log('🔧 Token details:', {
-        hasAccessToken: !!tokens.access_token,
-        hasRefreshToken: !!tokens.refresh_token,
-        expiryDate: tokens.expiry_date,
-        scope: tokens.scope
-      });
+    // Exchange code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    console.log('✅ Token exchange successful');
+    console.log('🔧 Received tokens:', {
+      access_token: tokens.access_token ? 'Present' : 'Missing',
+      refresh_token: tokens.refresh_token ? 'Present' : 'Missing',
+      expiry_date: tokens.expiry_date
+    });
 
-      // Set credentials for user info request
-      oauth2Client.setCredentials(tokens);
+    // Set credentials for API calls
+    oauth2Client.setCredentials(tokens);
 
-      // Get user information from Google
-      console.log('🔄 Fetching user information...');
-      const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-      const userInfo = await oauth2.userinfo.get();
-      
-      const googleUser = userInfo.data;
-      console.log('✅ Google user info received:', {
-        id: googleUser.id,
-        email: googleUser.email,
-        name: googleUser.name
-      });
+    // Get user info
+    console.log('🔄 Fetching user info...');
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const { data: userInfo } = await oauth2.userinfo.get();
+    console.log('✅ User info retrieved:', userInfo.email);
 
-      // Find or create user in database
-      let user = await User.findOne({ email: googleUser.email });
-      
-      if (!user) {
-        console.log('🔄 Creating new user...');
-        user = new User({
-          email: googleUser.email,
-          name: googleUser.name,
-          googleTokens: {
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token,
-            expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
-            scope: tokens.scope,
-            tokenType: tokens.token_type || 'Bearer',
-            idToken: tokens.id_token
-          }
-        });
-      } else {
-        console.log('🔄 Updating existing user tokens...');
-        user.googleTokens = {
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token || user.googleTokens?.refreshToken,
-          expiryDate: new Date(tokens.expiry_date || Date.now() + 3600000),
-          scope: tokens.scope,
-          tokenType: tokens.token_type || 'Bearer',
-          idToken: tokens.id_token
-        };
-      }
-      
-      await user.save();
-
-      // Store tokens in memory for immediate use
-      global.userTokens[googleUser.email] = {
+    // Save user and tokens to database
+    console.log('🔄 Saving user to database...');
+    const user = await User.findOneAndUpdate(
+      { googleId: userInfo.id },
+      {
+        googleId: userInfo.id,
+        email: userInfo.email,
+        name: userInfo.name,
+        picture: userInfo.picture,
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
-        expiryDate: tokens.expiry_date,
-        scope: tokens.scope,
-        tokenType: tokens.token_type,
-        email: googleUser.email,
-        name: googleUser.name,
-        userId: user._id.toString(),
-        connectedAt: new Date()
-      };
-
-      console.log('✅ User saved and tokens stored for:', googleUser.email);
-      
-      const successMessage = `Google Calendar connected successfully for ${googleUser.email}!`;
-
-      // Return appropriate response based on request method
-      if (req.method === 'POST') {
-        return res.json({ 
-          success: true, 
-          message: successMessage,
-          user: {
-            id: user._id,
-            email: googleUser.email,
-            name: googleUser.name
-          }
-        });
-      }
-
-      // Redirect for GET requests (from Google)
-      res.redirect(
-        `${process.env.FRONTEND_URL}?` +
-        `message=${encodeURIComponent(successMessage)}&` +
-        `type=success&` +
-        `email=${encodeURIComponent(googleUser.email)}`
-      );
-
-    } catch (tokenError) {
-      console.error('❌ Error during token exchange:', tokenError);
-      
-      if (tokenError.message?.includes('redirect_uri_mismatch')) {
-        console.error('🔧 REDIRECT_URI_MISMATCH DEBUG:');
-        console.error('   Configured URI:', process.env.GOOGLE_REDIRECT_URI);
-        console.error('   Request came from:', req.get('host'));
-        console.error('   Full request URL:', req.protocol + '://' + req.get('host') + req.originalUrl);
-        
-        // Check if there's a URL mismatch
-        const expectedHost = 'procalender-backend.onrender.com';
-        const actualHost = req.get('host');
-        
-        if (actualHost !== expectedHost) {
-          console.error('   HOST MISMATCH! Expected:', expectedHost, 'Got:', actualHost);
-        }
-      }
-      
-      throw tokenError;
-    }
-
-  } catch (error) {
-    console.error('❌ Error in Google OAuth callback:', error);
-    
-    const errorMessage = error.message || 'Authentication failed. Please try again.';
-    
-    if (req.method === 'POST') {
-      return res.status(500).json({ 
-        success: false, 
-        message: errorMessage,
-        debug: {
-          redirectUri: process.env.GOOGLE_REDIRECT_URI,
-          requestUrl: req.protocol + '://' + req.get('host') + req.originalUrl,
-          error: error.message
-        }
-      });
-    }
-    
-    res.redirect(
-      `${process.env.FRONTEND_URL}?error=${encodeURIComponent(errorMessage)}`
+        tokenExpiry: tokens.expiry_date,
+        updatedAt: new Date()
+      },
+      { upsert: true, new: true }
     );
+
+    console.log('✅ User saved successfully:', user.email);
+
+    // Return success response
+    res.json({
+      success: true,
+      message: `Google Calendar connected successfully for ${user.email}`,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture
+      },
+      tokens: {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expiry_date: tokens.expiry_date
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error during token exchange:', error);
+    
+    let errorMessage = 'Authentication failed';
+    let errorDetails = { error: error.message };
+    
+    if (error.message.includes('redirect_uri_mismatch')) {
+      errorMessage = 'redirect_uri_mismatch';
+      errorDetails = {
+        error: 'Redirect URI mismatch',
+        configuredUri: FRONTEND_REDIRECT_URI,
+        expectedUri: 'Must match Google Cloud Console configuration',
+        suggestion: 'Check Google Cloud Console OAuth 2.0 Client ID settings',
+        currentConfig: {
+          clientId: process.env.GOOGLE_CLIENT_ID ? 'Present' : 'Missing',
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET ? 'Present' : 'Missing',
+          redirectUri: FRONTEND_REDIRECT_URI
+        }
+      };
+    } else if (error.message.includes('invalid_grant')) {
+      errorMessage = 'invalid_grant';
+      errorDetails = {
+        error: 'Authorization code expired or already used',
+        suggestion: 'Please try the OAuth flow again',
+        note: 'Each authorization code can only be used once'
+      };
+    }
+
+    res.status(500).json({
+      success: false,
+      message: errorMessage,
+      debug: errorDetails
+    });
   }
 };
 
-// Check Google Calendar connection status
-// Replace the getGoogleAuthStatus function in controllers/authController.js
-
-exports.getGoogleAuthStatus = async (req, res) => {
+// Check Google OAuth status
+exports.checkGoogleOAuthStatus = async (req, res) => {
   try {
-    console.log('🔄 Checking Google auth status...');
-    console.log('🔍 Query params:', req.query);
-    console.log('🔍 Available memory tokens:', Object.keys(global.userTokens || {}));
+    const { email } = req.query;
     
-    const userEmail = req.query.email;
-    
-    // Check database first if email provided
-    if (userEmail) {
-      try {
-        const user = await User.findOne({ email: userEmail });
-        if (user?.googleTokens?.accessToken) {
-          const isExpired = user.googleTokens.expiryDate && 
-                           Date.now() >= user.googleTokens.expiryDate.getTime();
-          
-          console.log(`📧 Found user in database: ${userEmail}, expired: ${isExpired}`);
-          
-          return res.json({ 
-            connected: !isExpired, 
-            email: user.email,
-            name: user.name,
-            source: 'database',
-            connectedAt: user.googleTokens.connectedAt || user.updatedAt,
-            isExpired: isExpired,
-            debug: {
-              hasTokens: !!user.googleTokens,
-              expiryDate: user.googleTokens.expiryDate
-            }
-          });
-        } else {
-          console.log(`📧 User found in database but no tokens: ${userEmail}`);
-        }
-      } catch (dbError) {
-        console.log('⚠️ Database lookup error:', dbError.message);
-      }
-    }
-    
-    // Check in-memory storage
-    const userTokens = global.userTokens || {};
-    
-    // If email provided, look for specific user
-    if (userEmail && userTokens[userEmail]) {
-      const tokens = userTokens[userEmail];
-      const isExpired = tokens.expiryDate && Date.now() >= tokens.expiryDate;
-      
-      console.log(`📧 Found tokens in memory for: ${userEmail}, expired: ${isExpired}`);
-      
-      return res.json({ 
-        connected: !isExpired, 
-        email: tokens.email,
-        name: tokens.name,
-        source: 'memory',
-        connectedAt: tokens.connectedAt,
-        isExpired: isExpired,
-        debug: {
-          hasTokens: true,
-          expiryDate: tokens.expiryDate
-        }
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email parameter is required'
       });
     }
+
+    console.log('🔄 Checking OAuth status for:', email);
+
+    const user = await User.findOne({ email: email });
     
-    // If no email provided, check if we have any tokens
-    const tokenEntries = Object.values(userTokens);
-    
-    if (tokenEntries.length === 0) {
-      console.log('❌ No tokens found anywhere');
-      return res.json({ 
-        connected: false, 
-        email: '',
-        message: 'No Google Calendar connection found',
-        source: 'none',
-        debug: {
-          providedEmail: userEmail,
-          availableTokens: Object.keys(userTokens),
-          totalTokens: tokenEntries.length
-        }
+    if (!user) {
+      return res.json({
+        connected: false,
+        message: 'User not found'
       });
     }
-    
-    // Return first available token if no specific email requested
-    const firstToken = tokenEntries[0];
-    const isExpired = firstToken.expiryDate && Date.now() >= firstToken.expiryDate;
-    
-    console.log(`📧 Using first available token: ${firstToken.email}, expired: ${isExpired}`);
-    
-    res.json({ 
-      connected: !isExpired, 
-      email: firstToken.email || '',
-      name: firstToken.name || '',
-      source: 'memory-first',
-      connectedAt: firstToken.connectedAt,
+
+    // Check if tokens are still valid
+    const now = new Date();
+    const tokenExpiry = new Date(user.tokenExpiry);
+    const isExpired = now >= tokenExpiry;
+
+    console.log('✅ OAuth status checked:', {
+      email: user.email,
+      connected: true,
+      isExpired: isExpired
+    });
+
+    res.json({
+      connected: true,
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+      connectedAt: user.updatedAt,
       isExpired: isExpired,
+      tokenExpiry: user.tokenExpiry,
       debug: {
-        providedEmail: userEmail,
-        foundEmail: firstToken.email,
-        totalTokens: tokenEntries.length
+        foundEmail: user.email,
+        hasAccessToken: !!user.accessToken,
+        hasRefreshToken: !!user.refreshToken,
+        totalTokens: user.accessToken ? 1 : 0
       }
     });
-    
+
   } catch (error) {
-    console.error('❌ Error checking Google auth status:', error);
-    res.status(500).json({ 
-      connected: false, 
-      email: '',
-      error: error.message,
-      debug: {
-        providedEmail: req.query.email,
-        availableTokens: Object.keys(global.userTokens || {})
-      }
-    });
-  }
-};
-// Disconnect Google Calendar
-exports.disconnectGoogleCalendar = async (req, res) => {
-  try {
-    const userEmail = req.user?.email || req.body.email;
-    
-    if (userEmail) {
-      await User.updateOne(
-        { email: userEmail },
-        { $unset: { googleTokens: "" } }
-      );
-      delete global.userTokens[userEmail];
-    } else {
-      global.userTokens = {};
-    }
-    
-    console.log('✅ Google Calendar tokens cleared');
-    res.json({ 
-      success: true, 
-      message: 'Google Calendar disconnected successfully' 
-    });
-  } catch (error) {
-    console.error('❌ Error disconnecting Google Calendar:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to disconnect Google Calendar' 
+    console.error('❌ Error checking OAuth status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check OAuth status',
+      error: error.message
     });
   }
 };
 
-// Simplified auth middleware
-exports.verifyAuth = async (req, res, next) => {
+// Disconnect Google OAuth
+exports.disconnectGoogleOAuth = async (req, res) => {
   try {
-    const userTokens = global.userTokens || {};
-    const tokenEntries = Object.values(userTokens);
+    const { email } = req.body;
     
-    if (tokenEntries.length === 0) {
-      return res.status(401).json({ 
-        error: 'Unauthorized - No Google Calendar connection found',
-        needsAuth: true
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
       });
     }
-    
-    req.googleTokens = tokenEntries[0];
-    req.user = { 
-      email: tokenEntries[0].email,
-      id: tokenEntries[0].userId 
-    };
-    
-    console.log('✅ Auth verified with stored tokens');
-    next();
+
+    console.log('🔄 Disconnecting Google OAuth for:', email);
+
+    // Find and remove user tokens
+    const user = await User.findOneAndUpdate(
+      { email: email },
+      {
+        $unset: {
+          accessToken: "",
+          refreshToken: "",
+          tokenExpiry: ""
+        },
+        updatedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    console.log('✅ Google OAuth disconnected for:', email);
+
+    res.json({
+      success: true,
+      message: `Google Calendar disconnected for ${email}`,
+      user: {
+        email: user.email,
+        name: user.name,
+        connected: false
+      }
+    });
+
   } catch (error) {
-    console.error('Auth verification error:', error);
-    return res.status(401).json({ 
-      error: 'Unauthorized',
-      message: error.message
+    console.error('❌ Error disconnecting OAuth:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to disconnect OAuth',
+      error: error.message
     });
   }
 };
+
+// Refresh access token
+exports.refreshAccessToken = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    console.log('🔄 Refreshing access token for:', email);
+
+    const user = await User.findOne({ email: email });
+    
+    if (!user || !user.refreshToken) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found or no refresh token available'
+      });
+    }
+
+    // Create OAuth2 client and set refresh token
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({
+      refresh_token: user.refreshToken
+    });
+
+    // Refresh the access token
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    
+    // Update user with new tokens
+    user.accessToken = credentials.access_token;
+    if (credentials.refresh_token) {
+      user.refreshToken = credentials.refresh_token;
+    }
+    user.tokenExpiry = credentials.expiry_date;
+    user.updatedAt = new Date();
+    
+    await user.save();
+
+    console.log('✅ Access token refreshed for:', email);
+
+    res.json({
+      success: true,
+      message: 'Access token refreshed successfully',
+      tokens: {
+        access_token: credentials.access_token,
+        expiry_date: credentials.expiry_date
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error refreshing access token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to refresh access token',
+      error: error.message
+    });
+  }
+};
+
+module.exports = exports;
