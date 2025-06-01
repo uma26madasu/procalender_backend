@@ -90,8 +90,15 @@ exports.handleGoogleCallback = async (req, res) => {
     }
 
     // Exchange authorization code for tokens
+    // IMPORTANT: Use the original redirect_uri that was used to generate the code
+    const originalRedirectUri = req.body.redirect_uri || req.query.redirect_uri;
     console.log('🔄 Exchanging code for tokens...');
-    const { tokens } = await oauth2Client.getToken(code);
+    console.log('Using redirect_uri:', originalRedirectUri);
+    
+    const { tokens } = await oauth2Client.getToken({
+      code: code,
+      redirect_uri: originalRedirectUri
+    });
     
     if (!tokens.access_token) {
       throw new Error('No access token received from Google');
