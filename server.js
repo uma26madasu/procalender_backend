@@ -19,8 +19,8 @@ app.set('trust proxy', 1);
 console.log('🔧 Configuring CORS...');
 const corsOptions = {
   origin: [
+    'https://procalender-frontend.vercel.app',  // ✅ CORRECTED: Your actual frontend domain
     'https://procalender-frontend-uma26madasus-projects.vercel.app',
-    'https://procalender-frontend.vercel.app', 
     'http://localhost:3000',
     'http://localhost:5173',
     'http://127.0.0.1:3000',
@@ -35,7 +35,10 @@ const corsOptions = {
     'X-Requested-With',
     'Accept',
     'Origin',
-    'X-CSRF-Token'
+    'X-CSRF-Token',
+    'Cache-Control',  // ✅ ADDED: Missing cache-control header
+    'Pragma',
+    'Expires'
   ],
   credentials: true,
   optionsSuccessStatus: 200,
@@ -55,7 +58,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,X-CSRF-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,X-CSRF-Token,Cache-Control,Pragma,Expires');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
